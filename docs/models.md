@@ -17,6 +17,23 @@ DevMind only runs free / open-weight models through [Ollama](https://ollama.com)
 `quality` is a 0-100 prior for coding ability, used only for ranking (the router learns real
 win rates from feedback). It is deliberately coarse: 78 vs 79 is not meaningful.
 
+## llama.cpp (default backend)
+
+A llama.cpp server serves exactly one model, so DevMind stops pretending to route between many.
+Set the label and a quality prior once:
+
+```toml
+[backend]
+kind = "llamacpp"
+
+[llamacpp]
+base_url = "http://127.0.0.1:8080"   # or your tunnel address
+model = "qwen2.5-coder-7b"           # any label; it is what you started
+model_quality = 78                   # 0-100, drives routing vs. alternative backends
+model_size_gb = 4.7                  # used for memory-fit warnings
+context = 16384
+```
+
 ## Adding a model
 
 1. Check it runs locally: `ollama pull <id>`, then `ollama run <id>` once.

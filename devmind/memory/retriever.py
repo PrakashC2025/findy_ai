@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..chunkers import language_for
+from ..code import CodeHit
 from ..config import MemoryConfig
 from .store import Hit, MemoryStore
 
@@ -55,13 +57,15 @@ _PREFERENCE_PATTERNS = (
 class MemoryContext:
     block: str = ""
     hits: list[Hit] = field(default_factory=list)
-    citations: list[dict[str, str]] = field(default_factory=list)
+    code_hits: list[CodeHit] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
     preferences: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "block": self.block,
             "hits": [hit.to_dict() for hit in self.hits],
+            "code_hits": [hit.to_dict() for hit in self.code_hits],
             "citations": self.citations,
             "preferences": self.preferences,
         }
@@ -77,7 +81,11 @@ class Retriever:
 
     # ------------------------------------------------------------------ public
     def context_for(
-        self, prompt: str, *, extra_kinds: tuple[str, ...] | None = None
+        self,
+        prompt: str,
+        *,
+        extra_kinds: tuple[str, ...] | None = None,
+        repo: str | None = None,
     ) -> MemoryContext:
         if not self.config.enabled:
             return MemoryContext()
@@ -98,10 +106,8 @@ class Retriever:
             if hit.id not in best or hit.score > best[hit.id].score:
                 best[hit.id] = hit
         ordered = sorted(best.values(), key=lambda hit: hit.score, reverse=True)
-        if not ordered:
-            return MemoryContext()
 
-        citations: list[dict[str, str]] = []
+        citations: list[dict[str, Any]] = []
         lines: list[str] = []
         used = 0
         for index, hit in enumerate(ordered, start=1):
@@ -113,14 +119,73 @@ class Retriever:
             used += len(line)
             citations.append({"id": label, "kind": hit.kind, "text": hit.text})
 
-        block = (
-            "What you already know about this user and project "
-            "(cite as [M1], [M2] … when you rely on it):\n" + "\n".join(lines)
-        )
+        block = ""
+        if lines:
+            block = (
+                "What you already know about this user and project "
+                "(cite as [M1], [M2] ... when you rely on it):\n" + "\n".join(lines)
+            )
         preferences = [hit.text for hit in ordered if hit.kind in {"preference", "rule"}][:6]
+
+        code_block, code_hits, code_citations = self._code_context(prompt, repo)
+        if code_block:
+            block = f"{block}\n\n{code_block}" if block else code_block
+
         return MemoryContext(
-            block=block, hits=ordered, citations=citations, preferences=preferences
+            block=block,
+            hits=ordered,
+            code_hits=code_hits,
+            citations=[*citations, *code_citations],
+            preferences=preferences,
         )
+
+    def _code_context(
+        self, prompt: str, repo: str | None
+    ) -> tuple[str, list[CodeHit], list[dict[str, Any]]]:
+        """Relevant, cited code from the indexed project (empty if not indexed)."""
+        if not (repo and self.config.include_code and self.config.code_top_k > 0):
+            return "", [], []
+
+        hits = self.store.search_code(prompt, repo=repo, top_k=self.config.code_top_k)
+        if not hits:
+            return "", [], []
+
+        budget = self.config.code_max_chars
+        used = 0
+        lines = [
+            "Relevant code from the user's project "
+            "(cite as [C1], [C2] ... with file:line; never invent paths):"
+        ]
+        citations: list[dict[str, Any]] = []
+        kept: list[CodeHit] = []
+        for index, hit in enumerate(hits, start=1):
+            label = f"C{index}"
+            language = language_for(hit.path)
+            header = f"[{label}] {hit.location}"
+            if hit.symbol:
+                header += f" ({hit.kind} {hit.symbol})"
+            remaining = budget - used - len(header) - 20
+            if remaining < 120:
+                break
+            snippet = hit.text
+            if len(snippet) > remaining:
+                snippet = snippet[:remaining] + "\n... (truncated)"
+            block = f"{header}\n```{language}\n{snippet}\n```"
+            lines.append(block)
+            used += len(block)
+            kept.append(hit)
+            citations.append(
+                {
+                    "id": label,
+                    "kind": "code",
+                    "repo": hit.repo,
+                    "path": hit.path,
+                    "start_line": hit.start_line,
+                    "end_line": hit.end_line,
+                    "symbol": hit.symbol,
+                }
+            )
+        return "\n".join(lines), kept, citations
 
     # --------------------------------------------------------------- capturing
     def capture_preferences(self, text: str, *, session: str = "") -> list[str]:

@@ -16,6 +16,7 @@ anywhere. ``devmind forget`` and ``devmind wipe`` are implemented here.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -27,80 +28,11 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable, Iterable
 
+from ..code import Chunk, CodeHit, Symbol
 from ..security import redact_secrets
-from .embed import DIM, cosine, embed, from_bytes, to_bytes
+from .embed import DIM, cosine, embed, from_bytes, to_bytes, tokenize
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS memories (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    text TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'local',
-    created_at REAL NOT NULL,
-    updated_at REAL NOT NULL,
-    weight REAL NOT NULL DEFAULT 1.0,
-    meta TEXT NOT NULL DEFAULT '{}',
-    embedding BLOB
-);
-CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind);
-CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
-
-CREATE TABLE IF NOT EXISTS episodes (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at REAL NOT NULL,
-    meta TEXT NOT NULL DEFAULT '{}'
-);
-CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS feedback (
-    id TEXT PRIMARY KEY,
-    answer_id TEXT,
-    rating INTEGER NOT NULL,
-    task TEXT,
-    model TEXT,
-    correction TEXT,
-    created_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS model_stats (
-    task TEXT NOT NULL,
-    model TEXT NOT NULL,
-    alpha REAL NOT NULL DEFAULT 1.0,
-    beta REAL NOT NULL DEFAULT 1.0,
-    runs INTEGER NOT NULL DEFAULT 0,
-    wins INTEGER NOT NULL DEFAULT 0,
-    latency_ema REAL NOT NULL DEFAULT 0.0,
-    updated_at REAL NOT NULL,
-    PRIMARY KEY (task, model)
-);
-
-CREATE TABLE IF NOT EXISTS routing_log (
-    id TEXT PRIMARY KEY,
-    at REAL NOT NULL,
-    session TEXT,
-    task TEXT,
-    language TEXT,
-    difficulty REAL,
-    model TEXT,
-    reason TEXT,
-    prompt_chars INTEGER,
-    outcome TEXT
-);
-
-CREATE TABLE IF NOT EXISTS skills (
-    name TEXT PRIMARY KEY,
-    description TEXT NOT NULL DEFAULT '',
-    steps TEXT NOT NULL DEFAULT '[]',
-    successes INTEGER NOT NULL DEFAULT 0,
-    failures INTEGER NOT NULL DEFAULT 0,
-    updated_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-"""
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "storage" / "schema.sql"
 
 MEMORY_KINDS = ("preference", "fact", "snippet", "rule", "code")
 SCHEMA_VERSION = 1
@@ -176,7 +108,10 @@ class MemoryStore:
         if connection is None:
             connection = sqlite3.connect(self.path, check_same_thread=False, timeout=10)
             connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA journal_mode=WAL")
+            # WAL is unsupported in some SQLite-WASM builds; there the
+            # browser's OPFS setup handles durability instead.
+            with contextlib.suppress(sqlite3.OperationalError):
+                connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute("PRAGMA foreign_keys=ON")
             self._local.connection = connection
@@ -185,10 +120,11 @@ class MemoryStore:
     def _initialise(self) -> bool:
         with self._lock:
             connection = self._connection()
-            connection.executescript(SCHEMA)
+            connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             try:
                 connection.executescript(
                     "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, text);"
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(id UNINDEXED, text);"
                 )
                 fts = True
             except sqlite3.OperationalError:  # SQLite built without FTS5
@@ -653,6 +589,237 @@ class MemoryStore:
             for row in rows
         ]
 
+    # --------------------------------------------------------------- code index
+    def code_files(self, repo: str) -> dict[str, str]:
+        """Map path -> sha for one repository (drives incremental indexing)."""
+        rows = self._connection().execute("SELECT path, sha FROM code_files WHERE repo=?", (repo,))
+        return {row["path"]: row["sha"] for row in rows}
+
+    def replace_code_file(
+        self,
+        repo: str,
+        path: str,
+        sha: str,
+        lang: str,
+        size: int,
+        mtime: float,
+        chunks: list[Chunk],
+        symbols: list[Symbol],
+        *,
+        commit: bool = True,
+    ) -> tuple[int, int]:
+        """Replace all chunks/symbols for one file. Returns (chunks, symbols)."""
+        now = time.time()
+        with self._lock:
+            connection = self._connection()
+            if self._fts:
+                old_ids = [
+                    row["id"]
+                    for row in connection.execute(
+                        "SELECT id FROM code_chunks WHERE repo=? AND path=?", (repo, path)
+                    )
+                ]
+                for chunk_id in old_ids:
+                    connection.execute("DELETE FROM code_fts WHERE id=?", (chunk_id,))
+            connection.execute("DELETE FROM code_chunks WHERE repo=? AND path=?", (repo, path))
+            connection.execute("DELETE FROM code_symbols WHERE repo=? AND path=?", (repo, path))
+
+            for chunk in chunks:
+                chunk_id = _new_id("cc_")
+                connection.execute(
+                    "INSERT INTO code_chunks(id,repo,path,start_line,end_line,kind,symbol,text,sha,embedding)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        chunk_id,
+                        repo,
+                        path,
+                        chunk.start_line,
+                        chunk.end_line,
+                        chunk.kind,
+                        chunk.symbol,
+                        chunk.text,
+                        sha,
+                        to_bytes(self._embed(chunk.text)),
+                    ),
+                )
+                if self._fts:
+                    connection.execute(
+                        "INSERT INTO code_fts(id, text) VALUES(?, ?)",
+                        (chunk_id, f"{path} {chunk.symbol} {chunk.text}"),
+                    )
+            for symbol in symbols:
+                connection.execute(
+                    "INSERT INTO code_symbols(id,repo,path,name,kind,line) VALUES(?,?,?,?,?,?)",
+                    (_new_id("sym_"), repo, path, symbol.name, symbol.kind, symbol.line),
+                )
+            connection.execute(
+                "INSERT INTO code_files(repo,path,sha,lang,size,mtime,indexed_at) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(repo,path) DO UPDATE SET "
+                "sha=excluded.sha, lang=excluded.lang, size=excluded.size, "
+                "mtime=excluded.mtime, indexed_at=excluded.indexed_at",
+                (repo, path, sha, lang, size, mtime, now),
+            )
+            if commit:
+                connection.commit()
+        return len(chunks), len(symbols)
+
+    def delete_code_file(self, repo: str, path: str, *, commit: bool = True) -> None:
+        with self._lock:
+            connection = self._connection()
+            if self._fts:
+                for row in connection.execute(
+                    "SELECT id FROM code_chunks WHERE repo=? AND path=?", (repo, path)
+                ):
+                    connection.execute("DELETE FROM code_fts WHERE id=?", (row["id"],))
+            connection.execute("DELETE FROM code_chunks WHERE repo=? AND path=?", (repo, path))
+            connection.execute("DELETE FROM code_symbols WHERE repo=? AND path=?", (repo, path))
+            connection.execute("DELETE FROM code_files WHERE repo=? AND path=?", (repo, path))
+            if commit:
+                connection.commit()
+
+    def delete_repo(self, repo: str) -> None:
+        with self._lock:
+            connection = self._connection()
+            if self._fts:
+                for row in connection.execute("SELECT id FROM code_chunks WHERE repo=?", (repo,)):
+                    connection.execute("DELETE FROM code_fts WHERE id=?", (row["id"],))
+            for table in ("code_chunks", "code_symbols", "code_files", "index_state"):
+                connection.execute(f"DELETE FROM {table} WHERE repo=?", (repo,))
+            connection.commit()
+
+    def flush(self) -> None:
+        with self._lock:
+            self._connection().commit()
+
+    def set_index_state(self, repo: str, root: str, *, complete: bool) -> None:
+        with self._lock:
+            connection = self._connection()
+            connection.execute(
+                "INSERT INTO index_state(repo,root,updated_at,complete) VALUES(?,?,?,?) "
+                "ON CONFLICT(repo) DO UPDATE SET root=excluded.root, "
+                "updated_at=excluded.updated_at, complete=excluded.complete",
+                (repo, root, time.time(), 1 if complete else 0),
+            )
+            connection.commit()
+
+    def get_index_state(self, repo: str) -> dict[str, Any] | None:
+        row = (
+            self._connection().execute("SELECT * FROM index_state WHERE repo=?", (repo,)).fetchone()
+        )
+        if row is None:
+            return None
+        return {
+            "repo": row["repo"],
+            "root": row["root"],
+            "updated_at": row["updated_at"],
+            "complete": bool(row["complete"]),
+        }
+
+    def list_repos(self) -> list[dict[str, Any]]:
+        rows = (
+            self._connection()
+            .execute(
+                "SELECT f.repo AS repo, COUNT(*) AS files, MAX(f.indexed_at) AS updated "
+                "FROM code_files f GROUP BY f.repo ORDER BY updated DESC"
+            )
+            .fetchall()
+        )
+        repos = []
+        for row in rows:
+            chunk_row = (
+                self._connection()
+                .execute("SELECT COUNT(*) AS chunks FROM code_chunks WHERE repo=?", (row["repo"],))
+                .fetchone()
+            )
+            state = self.get_index_state(row["repo"]) or {}
+            repos.append(
+                {
+                    "repo": row["repo"],
+                    "files": row["files"],
+                    "chunks": chunk_row["chunks"],
+                    "updated_at": row["updated"],
+                    "root": state.get("root", ""),
+                }
+            )
+        return repos
+
+    def search_code(self, query: str, *, repo: str | None = None, top_k: int = 6) -> list[CodeHit]:
+        """Hybrid retrieval over code chunks, with path/symbol bonuses."""
+        query = (query or "").strip()
+        if not query:
+            return []
+        query_vector = self._embed(query)
+        tokens = [token for token in tokenize(query) if len(token) > 2]
+        candidates: dict[str, tuple[sqlite3.Row, float]] = {}
+
+        with self._lock:
+            connection = self._connection()
+            where = "WHERE repo=?" if repo else ""
+            params: tuple[Any, ...] = (repo,) if repo else ()
+
+            if self._fts and tokens:
+                match = " OR ".join(f'"{token}"' for token in tokens[:24])
+                sql = (
+                    "SELECT c.*, bm25(code_fts) AS rank FROM code_fts "
+                    "JOIN code_chunks c ON c.id = code_fts.id "
+                    f"WHERE code_fts MATCH ? {('AND c.repo=?' if repo else '')} "
+                    "ORDER BY rank LIMIT 300"
+                )
+                try:
+                    rows = connection.execute(
+                        sql, (match, *params) if repo else (match,)
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
+                best_rank = max((-row["rank"] for row in rows), default=0.0) or 1.0
+                for row in rows:
+                    candidates[row["id"]] = (row, min(1.0, (-row["rank"]) / best_rank))
+
+            for row in connection.execute(f"SELECT * FROM code_chunks {where} LIMIT 8000", params):
+                candidates.setdefault(row["id"], (row, 0.0))
+
+        hits: list[CodeHit] = []
+        for chunk_id, (row, lexical) in candidates.items():
+            vector = from_bytes(row["embedding"]) if row["embedding"] else None
+            semantic = max(0.0, cosine(query_vector, vector)) if vector else 0.0
+            relevance = 0.62 * semantic + 0.38 * lexical
+            if relevance <= 0.03:
+                continue
+            score = relevance
+            haystack = f"{row['path']} {row['symbol']}".lower()
+            if any(token in haystack for token in tokens[:8]):
+                score += 0.12
+            hits.append(
+                CodeHit(
+                    chunk_id=chunk_id,
+                    repo=row["repo"],
+                    path=row["path"],
+                    start_line=row["start_line"],
+                    end_line=row["end_line"],
+                    kind=row["kind"],
+                    symbol=row["symbol"],
+                    text=row["text"],
+                    score=score,
+                )
+            )
+        hits.sort(key=lambda hit: hit.score, reverse=True)
+        return hits[:top_k]
+
+    def code_stats(self, repo: str | None = None) -> dict[str, Any]:
+        connection = self._connection()
+        where = "WHERE repo=?" if repo else ""
+        params: tuple[Any, ...] = (repo,) if repo else ()
+        files = connection.execute(
+            f"SELECT COUNT(*) AS c FROM code_files {where}", params
+        ).fetchone()["c"]
+        chunks = connection.execute(
+            f"SELECT COUNT(*) AS c FROM code_chunks {where}", params
+        ).fetchone()["c"]
+        symbols = connection.execute(
+            f"SELECT COUNT(*) AS c FROM code_symbols {where}", params
+        ).fetchone()["c"]
+        return {"files": files, "chunks": chunks, "symbols": symbols, "fts": self._fts}
+
     # ------------------------------------------------------------------ stats
     def stats(self) -> dict[str, Any]:
         connection = self._connection()
@@ -670,6 +837,7 @@ class MemoryStore:
             "fts": self._fts,
             "path": str(self.path),
             "schema_version": self.get_meta("schema_version"),
+            "code": self.code_stats(),
         }
 
     # --------------------------------------------------------------- transfer

@@ -1,147 +1,173 @@
 # DevMind architecture
 
-> Scope of this document: what is implemented today (step 1), the contracts that later
-> steps plug into, and the reasoning behind the choices. Anything not implemented is
-> labelled **planned** so nobody mistakes a roadmap for a feature.
+> Scope: what exists today (steps 1-2), the contracts later steps plug into, and the reasoning
+> behind the choices. Anything not implemented is labelled **planned**.
 
 ## 1. Goals, ranked
 
 1. **Correct over clever.** A wrong-but-confident answer is the failure mode we optimise against.
 2. **Do exactly what was asked.** No drive-by refactors, renames or dependencies.
-3. **Free.** Open weights through Ollama, open-source Python, no paid code path.
-4. **Local and private.** Loopback only, one SQLite file, no telemetry, explicit delete commands.
-5. **Fast.** Interactive on a laptop; background work never blocks the UI (planned for the API/UI steps).
-6. **Language-agnostic.** The router understands common languages; nothing is Python-only.
+3. **Free.** Open weights on hardware you own, open-source Python, free GitHub device login,
+   Actions on your own repos.
+4. **Local and private.** Loopback/tunnel only, one SQLite file, encrypted GitHub token, no telemetry.
+5. **Fast and mobile-friendly.** Bounded, resumable background work; the phone is a thin client.
+6. **Language-agnostic.** Task/language detection and chunkers are not Python-only.
 
-Non-goals: beating frontier cloud models on raw benchmarks; training foundation models;
-being a general chat assistant.
+Non-goals: beating frontier cloud models at everything; training foundation models; being a
+general chat assistant.
 
 ## 2. Component map
 
 ```
-                 ┌──────────────────────────────────────────────┐
-   user ────────▶│  cli.py   (argparse, streaming, JSON output) │
-                 └───────┬───────────────┬──────────────┬───────┘
-                         │               │              │
-                 ┌───────▼──────┐ ┌──────▼───────┐ ┌────▼─────────┐
-                 │ router.py    │ │ prompts.py   │ │ memory/      │
-                 │ classify +   │ │ system rules │ │ retriever.py │
-                 │ pick model   │ │ + task guide │ │ (RAG)        │
-                 └───┬───────┬──┘ └──────────────┘ └────┬─────────┘
-                     │       │                          │
-        ┌────────────▼──┐ ┌──▼─────────┐        ┌───────▼─────────┐
-        │ registry.py   │ │ hardware.py│        │ memory/store.py │
-        │ models.toml   │ │ RAM/VRAM,  │        │ SQLite + FTS5   │
-        │ roles, sizes  │ │ budget,    │        │ + embeddings    │
-        │ licenses      │ │ tok/s      │        │ + feedback      │
-        └───────────────┘ └────────────┘        └─────────────────┘
-                     │
-              ┌──────▼───────────────────────────────────────────┐
-              │ backends.py                                      │
-              │  OllamaBackend  (loopback HTTP, stream, pulls)   │
-              │  DemoBackend    (deterministic, clearly labelled)│
-              └──────────────────────────────────────────────────┘
+                    ┌─────────────────────────────────────────────┐
+   CLI / (planned)  │ cli.py : commands, streaming, JSON output   │
+   API / PWA        └───┬────────────┬────────────┬───────────┬───┘
+                        │            │            │           │
+              ┌─────────▼──┐  ┌──────▼──────┐ ┌───▼─────┐ ┌───▼────────┐
+              │ router.py  │  │ prompts.py  │ │ indexer │ │ github.py  │
+              │ classify + │  │ hard rules  │ │ +chunker│ │ device flow│
+              │ pick model │  │ + task guide│ │         │ │ git + PR   │
+              └──┬──────┬──┘  └──────┬──────┘ └───┬─────┘ └───┬────────┘
+                 │      │            │            │           │
+      ┌──────────▼┐  ┌──▼────────┐ ┌─▼──────────┐ │      ┌────▼─────┐
+      │registry.py│  │hardware.py│ │ retriever  │ │      │ verify.py│
+      │models.toml│  │budgets    │ │ memory+code│ │      │ local+CI │
+      └───────────┘  └───────────┘ └─────┬──────┘ │      └──────────┘
+                                          │        │
+                              ┌───────────▼────────▼───────┐
+                              │ memory/store.py            │
+                              │ SQLite (portable schema)   │
+                              │ memories, episodes,        │
+                              │ feedback, stats, routing,  │
+                              │ code files/chunks/symbols  │
+                              └───────────┬────────────────┘
+                                          │
+                              ┌───────────▼────────────────┐
+                              │ backends/                  │
+                              │  llamacpp (default)        │
+                              │  ollama (desktop)          │
+                              │  demo (tests/--demo)       │
+                              │  PWA WebLLM (planned, JS)  │
+                              └────────────────────────────┘
 ```
 
-## 3. Request lifecycle (`devmind ask "…"`)
+## 3. Request lifecycle (`devmind ask --repo . "…"`)
 
-1. **Load config** (`~/.devmind/config.toml`), detect hardware (RAM, VRAM, bandwidth), load
-   the registry (bundled + user override) and open the user's SQLite memory.
-2. **Probe Ollama** for installed models (`/api/tags`). Failure is not fatal: the CLI explains
-   what to install.
-3. **Classify** the prompt: task, language, difficulty, with a list of signals for auditability.
-4. **Route**: filter candidates by installed / memory fit / speed floor / optional caps, then
-   score by prior quality, estimated speed, difficulty and learned win rate.
-5. **Retrieve memory** (relevance-gated), auto-capture explicit preferences from declarative
-   clauses.
-6. **Build prompts**: hard rules + task guidance + output format + cited memory + history.
-7. **Stream** tokens from the chosen model, measuring time-to-first-token and total time.
-8. **Record** the episode and the routing decision (model, reason, outcome) for learning.
+1. Load config, detect hardware, load registry (+ the configured llama.cpp model), open SQLite.
+2. Incrementally index the repo (hash-based; usually milliseconds when nothing changed).
+3. Classify the prompt: task, language, difficulty, with audit signals.
+4. Route: filter by installed/fit/speed floor/caps, score by quality, difficulty-weighted speed and
+   learned win rate. A single-model llama.cpp server is used directly.
+5. Retrieve relevance-gated memory and cited code chunks (`[M1]`, `[C1] path:lines`).
+6. Build the prompt: hard rules, task guidance, output format, memory, code.
+7. Stream tokens, measuring first-token and total time.
+8. Record the episode and routing decision; run verification separately (`devmind verify`).
 
 ## 4. Contracts
 
 ```python
 class Backend(Protocol):
+    name: str
     async def list_models(self) -> list[str]: ...
+    async def health(self) -> Health: ...
     async def chat(self, messages, model, *, options=None,
                    keep_alive=None) -> AsyncIterator[str]: ...
     async def aclose(self) -> None: ...
 ```
 
-*Adding a backend* (llama.cpp server, vLLM, LM Studio) means implementing three methods; the
-router, prompts and memory are untouched. `OllamaBackend` recreates its `httpx.AsyncClient`
-when the running event loop changes, because the CLI uses `asyncio.run()` per command — a
-subtle bug that `test_client_rebinds_across_event_loops` pins down.
+*Adding a backend* (LM Studio, vLLM, the PWA bridge) means implementing four methods. The demo
+backend shows how little is required. `LoopClient` recreates the HTTP client when the event loop
+changes, because the CLI uses `asyncio.run()` per command.
 
-`MemoryStore` exposes `remember/search/forget/list_memories/episodes/feedback/model_stats/
-routing_log/export/import/wipe`. The retriever depends on this interface only, so a
-Google-Drive-backed store (planned) can implement it without changing callers.
+```python
+class MemoryStore:  # storage contract
+    remember / search / forget / list_memories
+    record_episode / add_feedback / model_stats
+    log_route / recent_routes
+    code_files / replace_code_file / search_code / list_repos / index_state
+    export_json / import_json / wipe
+```
 
-## 5. Data model
+The retriever depends on this interface only, so a Drive-backed or WASM-backed store can implement
+it without touching callers.
+
+## 5. Data model (portable)
+
+One schema file: [`devmind/storage/schema.sql`](devmind/storage/schema.sql). No `AUTOINCREMENT`,
+`STRICT`, generated columns or unguarded WAL — SQLite-WASM in the PWA opens the same file.
 
 | Table | Purpose |
 |---|---|
-| `memories` | Durable knowledge (`preference`, `fact`, `snippet`, `rule`, `code`) + 1024-d vector + weight |
-| `episodes` | Conversation log per session (redacted) |
-| `feedback` | `rating`, correction text, task and model — the learning signal |
+| `memories` | preferences, facts, snippets, rules + 1024-d vector + weight |
+| `episodes` | conversation log per session (redacted) |
+| `feedback` | rating + correction, the learning signal |
 | `model_stats` | Beta-Bernoulli posterior per (task, model) + latency EMA |
-| `routing_log` | One row per answer: task, language, difficulty, model, reason, outcome |
-| `skills` | Learned procedures (planned to be written by the agent loop) |
-| `meta` | Schema version, embedder identity for migration |
+| `routing_log` | why each answer used the model it did |
+| `skills` | learned procedures (agent loop, planned) |
+| `code_files` | path + sha per repo (incremental indexing) |
+| `code_chunks` | chunk text, line range, symbol, vector, sha |
+| `code_symbols` | name/kind/line for existence checks |
+| `index_state` | repo root + completion flag (resumability) |
+| `meta` | schema/embedder version |
 
-All writes pass through secret redaction when `privacy.redact_secrets` is on (default).
+FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retrieval uses vectors only.
 
-## 6. Retrieval and learning
+## 6. Indexing and retrieval
 
-* **Hybrid retrieval**: FTS5 bm25 (normalised to the best hit) + hashed-vector cosine, combined
-  into a *relevance* score. Recency and weight only *boost* an already-relevant memory; they can
-  never pull an unrelated memory into the prompt. This is why "we use pnpm" is injected for a
-  question about npm but not for a question about quicksort.
-* **Preferences** are captured only from declarative clauses; questions and conditionals are
-  rejected (`test_preference_capture_is_conservative`).
-* **Routing learns** through `model_stats`: once feedback exists, win rates add up to ±0.10 to a
-  model's score. Hard constraints (fit, speed floor, explicit choice) always win.
+* **Incremental**: sha256 per file; unchanged files never re-read; deleted files pruned only when
+  the walk completed.
+* **Resumable**: time/file caps stop the run, persist progress and report `complete=False`.
+* **Bounded**: size caps, excluded dirs, secret-looking paths, chunk char/line budgets.
+* **Chunking**: Python `ast` with exact line ranges; generic declaration regexes elsewhere;
+  bounded-window fallback. One contract (`chunk_file`) so tree-sitter can replace the fallback later.
+* **Retrieval**: relevance = 0.62·vector + 0.38·bm25 (normalised to the best hit), with a bonus when
+  the path or symbol matches. Recency/weight only boost relevance; they cannot inject an unrelated
+  chunk. Code citations are `path:start-end`, never guessed.
 
-## 7. Key decisions and trade-offs
+## 7. GitHub and verification
+
+* Device flow → token encrypted with scrypt-derived Fernet key in a `0600` file.
+* Git auth via environment config, not argv/URL; error output scrubbed.
+* `ensure_safe_branch()` blocks the default branch for every push; PR head==base is rejected.
+* Verification: local project test command with timeout + scrubbed env, or Actions dispatch + poll
+  with failed-step names. **No sandbox yet** (step 3).
+
+## 8. Key decisions and trade-offs
 
 | Decision | Why | Cost |
 |---|---|---|
-| Rules-first classifier instead of a model | Instant, explainable, no extra model in memory; covers common phrasing | Misses unusual prompts; a tiny classifier is **planned** as a tie-breaker and its label is logged |
-| Registry as TOML data | Users add models without code; licenses are visible | Slightly more parsing code; schema must stay stable |
-| Feature-hashing embeddings | Zero downloads, microseconds, deterministic | Purely lexical-ish recall; real embeddings (`nomic-embed-text`) are **planned** with automatic re-embedding |
-| Bandwidth-based tok/s estimate | Useful before the first run | ±30 % error; replaced by measured `latency_ema` |
-| One SQLite file per user | Trivial backup/sync/delete story | No concurrent multi-process writes (WAL covers typical use) |
-| Demo backend | Lets tests and the CLI run with no model **without lying** | Must stay clearly labelled; the router never counts it as a real model |
-| Loopback only | Privacy by construction | No remote inference fallback; remote use requires a tunnel the user owns |
+| Rules-first routing | Instant, explainable, no extra model | Misses unusual phrasing; logs enable a tiny classifier later |
+| llama.cpp as default backend | One GGUF, one server, works on any OS, can be tunnelled | User must download GGUF + start a server |
+| Registry as TOML data | Add models without code; licenses visible | Schema must stay stable |
+| Portable SQLite schema | Same DB on phone and PC | Sacrifices FTS5 guarantees and SQLite conveniences |
+| Feature-hashing embeddings | Zero downloads, microseconds | Lexical-ish recall; real embeddings planned |
+| One model per llama.cpp server | No fake routing to models that are not loaded | Quality is whatever you started |
+| Local tests without sandbox | Works today with zero setup | Not safe for untrusted repos; step 3 fixes |
+| No silent network calls | Privacy by construction | Web grounding (step 5) must be explicit and cached |
 
-## 8. Planned steps and how they plug in
+## 9. Roadmap
 
-* **Step 2 — code indexer.** Incremental file walker with content hashes → AST-aware chunks
-  (Python `ast` first, tree-sitter optional) → new `code_chunks` table + FTS. Symbol and import
-  extraction feeds the existence checks below. The retriever gains a `kinds=("code",)` lane.
-* **Step 3 — verification.** A `verify.py` pipeline (parse → lint → type-check → run tests in a
-  restricted subprocess with CPU/time limits) plus a self-repair loop capped at N rounds. It
-  consumes `Candidate`s and writes confidence back to the answer and to `feedback`.
-* **Step 4 — ensemble/judge.** Ask 2-3 models only when difficulty crosses a threshold; score each
-  answer with step-3 checks + agreement; the judge model picks/rejects, never concatenates.
-* **Step 5 — web knowledge.** Cached fetches from official docs, version detection from project
-  manifests, provenance attached to every claim, and prompt-injection defences (content is data,
-  never instructions).
-* **Step 6 — feedback and LoRA.** Accept/edit/reject capture in the CLI and API; dataset export;
-  QLoRA via PEFT/Unsloth when idle; adapter registry with automatic evaluation and rollback.
-* **Step 7 — Google Drive.** OAuth with the token in the OS keychain, app-data folder only,
-  encrypted snapshots; the store's export/import already produce the payload.
-* **Step 8 — API/UI.** FastAPI on loopback with an OpenAI-compatible endpoint so existing editors
-  work; SSE for the web UI; the VS Code extension reuses the same client.
-* **Step 9 — eval suite.** 100+ tasks (HumanEval/MBPP-style + user-repo tasks) reported as pass
-  rate, hallucinated-symbol rate, latency and RSS; CI fails on regression.
-* **Step 10 — docs** grow with each step (`docs/`).
+* **Step 3 - verification pipeline.** `sandbox.py` (container or restricted subprocess, CPU/mem/time
+  limits, network off), self-repair loop capped at N rounds, confidence scoring.
+* **Step 4 - ensemble/judge.** 2-3 candidates on hard tasks, scored by step-3 checks + agreement;
+  judge picks, never concatenates.
+* **Step 5 - web knowledge.** Cached official docs, version detection from manifests, provenance,
+  prompt-injection defences.
+* **Step 6 - feedback + LoRA.** Accept/edit/reject capture, dataset export, QLoRA when idle,
+  adapter registry with evaluation and rollback.
+* **Step 7 - Drive + encryption.** OAuth, app-data folder, encrypted snapshots, passphrase-derived
+  keys for memory (not only the GitHub token).
+* **Step 8 - PWA + API.** FastAPI on loopback, SSE, service worker, WebLLM/wllama in a worker,
+  OpenAI-compatible endpoint for editors, VS Code extension.
+* **Step 9 - evaluation.** 100+ tasks (HumanEval/MBPP-style + repo tasks), pass rate,
+  hallucinated-symbol rate, latency, RSS; CI regression gate.
+* **Step 10 - docs** grow with each step.
 
-## 9. Testing strategy
+## 10. Testing strategy
 
-* Unit tests for every pure function (classification, routing maths, hardware budgeting,
-  redaction, retrieval gating).
-* A deterministic `DemoBackend` so CLI tests exercise the full path without Ollama.
-* A `fake_hw` fixture modelling a 16 GB laptop so routing decisions are reproducible.
-* Failure-path tests: unreachable Ollama, unknown model, memory wipe, empty registry fallbacks.
-* `pytest` runs in ~1.3 s, which keeps the "run tests at every step" loop honest.
+* 130 tests in ~3.8 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
+  incremental/resumable indexing, retrieval gating, prompts, redaction, backends (MockTransport),
+  GitHub flows (local bare repo + mocked API), verification (local + fake Actions), CLI paths.
+* Failure paths are first-class: unreachable servers, unknown models, wrong passphrase, protected
+  branches, timeouts, empty checks.
+* `ruff check` + `ruff format --check` are clean; both are part of `make lint`.

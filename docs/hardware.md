@@ -3,6 +3,14 @@
 DevMind picks models from what your machine can actually run. This page explains how that
 decision is made, what the numbers mean, and how to override it.
 
+## Choose a backend first
+
+DevMind is backend-agnostic. The default is a **llama.cpp server** (`llama-server -m model.gguf`),
+which is the recommended setup for a home PC because one GGUF file, one process, any OS, and it can
+be reached from your phone through a private tunnel. **Ollama** remains supported for desktop
+convenience (`[backend] kind = "ollama"`). The sizing rules below apply to both — they describe the
+model, not the runtime.
+
 ## What is detected
 
 | Signal | Linux | macOS | Windows |

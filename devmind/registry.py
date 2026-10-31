@@ -112,6 +112,11 @@ class Registry:
             notes=str(raw.get("notes", "")),
         )
 
+    def upsert(self, model: Model) -> None:
+        """Add or replace a registry entry (used for the llama.cpp model)."""
+        self.models = [existing for existing in self.models if existing.id != model.id]
+        self.models.append(model)
+
     # ---------------------------------------------------------------- queries
     def all(self) -> list[Model]:
         return list(self.models)

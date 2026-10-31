@@ -26,6 +26,34 @@ def default_home() -> Path:
 
 
 @dataclass
+class BackendConfig:
+    """Which inference backend the home PC uses.
+
+    ``llamacpp`` (default) talks to a llama.cpp server on the user's own
+    machine or home PC.  ``ollama`` is kept because it is the easiest way to run
+    models on a desktop.  ``demo`` answers with a labelled placeholder and is
+    used by tests.  The on-device (WebLLM/wllama) backend lives in the PWA and
+    speaks the same interface from the browser side.
+    """
+
+    kind: str = "llamacpp"  # llamacpp | ollama | demo
+
+
+@dataclass
+class LlamaCppConfig:
+    """A user-owned llama.cpp server (usually reached over a private tunnel)."""
+
+    base_url: str = "http://127.0.0.1:8080"
+    model: str = "local-model"
+    api_key: str = ""  # only if the tunnel adds its own auth
+    model_quality: float = 75.0  # 0-100 prior used by the router
+    model_size_gb: float = 0.0  # 0 = let the router assume it fits
+    context: int = 16384
+    connect_timeout_s: float = 3.0
+    request_timeout_s: float = 300.0
+
+
+@dataclass
 class OllamaConfig:
     """Connection to a local Ollama server (never leaves the machine)."""
 
@@ -76,6 +104,63 @@ class MemoryConfig:
     min_score: float = 0.10  # below this a memory is noise, not context
     max_chars_in_prompt: int = 4000
     auto_capture_preferences: bool = True
+    include_code: bool = True  # inject relevant chunks from the code index
+    code_top_k: int = 4
+    code_max_chars: int = 3200
+
+
+@dataclass
+class IndexConfig:
+    """Code indexer limits: resumable, bounded, phone-friendly."""
+
+    enabled: bool = True
+    max_files: int = 20_000
+    max_file_bytes: int = 512_000
+    max_seconds: float = 120.0  # stop and resume next run
+    batch_size: int = 200  # commit every N files
+    window_lines: int = 60  # generic chunker window
+    exclude: list[str] = field(
+        default_factory=lambda: [
+            ".git",
+            ".hg",
+            ".svn",
+            "node_modules",
+            ".venv",
+            "venv",
+            "dist",
+            "build",
+            "target",
+            "vendor",
+            "__pycache__",
+            ".next",
+            ".cache",
+            "coverage",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key",
+            "*.p12",
+            "id_rsa*",
+            "*credential*",
+            "*secret*",
+            "*.min.js",
+            "*.map",
+            "*.lock",
+        ]
+    )
+
+
+@dataclass
+class GitHubConfig:
+    """GitHub access. Login is your own account; there is no paid API key."""
+
+    client_id: str = ""  # OAuth App client id for the device flow
+    api_url: str = "https://api.github.com"
+    scopes: str = "repo read:user"
+    token_path: str = ""  # default: $DEVMIND_HOME/credentials.enc
 
 
 @dataclass
@@ -88,11 +173,15 @@ class PrivacyConfig:
 @dataclass
 class Config:
     home: Path = field(default_factory=default_home)
+    backend: BackendConfig = field(default_factory=BackendConfig)
+    llamacpp: LlamaCppConfig = field(default_factory=LlamaCppConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     router: RouterConfig = field(default_factory=RouterConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    index: IndexConfig = field(default_factory=IndexConfig)
+    github: GitHubConfig = field(default_factory=GitHubConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     offline: bool = False
 
@@ -112,6 +201,14 @@ class Config:
     @property
     def cache_dir(self) -> Path:
         return self.home / "cache"
+
+    @property
+    def credentials_path(self) -> Path:
+        return (
+            Path(self.github.token_path).expanduser()
+            if self.github.token_path
+            else self.home / "credentials.enc"
+        )
 
     def ensure_dirs(self) -> None:
         for path in (self.home, self.cache_dir):
@@ -153,6 +250,16 @@ class Config:
             self.home = Path(env["DEVMIND_HOME"]).expanduser()
         if env.get("DEVMIND_OLLAMA_URL"):
             self.ollama.base_url = env["DEVMIND_OLLAMA_URL"]
+        if env.get("DEVMIND_BACKEND"):
+            self.backend.kind = env["DEVMIND_BACKEND"]
+        if env.get("DEVMIND_LLAMACPP_URL"):
+            self.llamacpp.base_url = env["DEVMIND_LLAMACPP_URL"]
+        if env.get("DEVMIND_LLAMACPP_MODEL"):
+            self.llamacpp.model = env["DEVMIND_LLAMACPP_MODEL"]
+        if env.get("DEVMIND_LLAMACPP_KEY"):
+            self.llamacpp.api_key = env["DEVMIND_LLAMACPP_KEY"]
+        if env.get("DEVMIND_GITHUB_CLIENT_ID"):
+            self.github.client_id = env["DEVMIND_GITHUB_CLIENT_ID"]
         if env.get("DEVMIND_MODEL"):
             self.models.default = env["DEVMIND_MODEL"]
         if env.get("DEVMIND_OFFLINE", "").lower() in {"1", "true", "yes"}:

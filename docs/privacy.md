@@ -10,19 +10,33 @@ Everything DevMind creates lives in `$DEVMIND_HOME` (default `~/.devmind`):
 ```
 ~/.devmind/
   config.toml       your settings (no secrets required — keys are not part of DevMind)
-  memory.db         SQLite: memories, episodes, feedback, model statistics, routing log
-  memory.db-wal     SQLite write-ahead log (transient)
+  memory.db         SQLite: memories, episodes, feedback, stats, routing log, code index
+  memory.db-wal     SQLite write-ahead log (transient; skipped where unsupported)
+  credentials.enc   GitHub token, encrypted with your passphrase (0600)
   cache/            reserved for the web-knowledge cache (step 5)
   models.toml       optional registry override
+  repos/            clones made by `devmind github clone`
 ```
+
+The code index contains **source code you chose to index**. Excluded by default: `.git`,
+`node_modules`, virtualenvs, build output, lockfiles, `.env*`, `*.pem`, `*.key`, `*secret*`,
+`*credential*`. Indexing happens locally; chunks never go anywhere except your inference server
+when you ask a question.
 
 There is no account, no sync, no analytics endpoint, no crash reporter, no update ping.
 
 ## What leaves the machine
 
-**Nothing, by default.** The only network call DevMind makes is HTTP to
-`http://127.0.0.1:11434` (Ollama on your own machine), and `devmind pull` lets Ollama download a
-model from its registry — that download is Ollama's traffic, not yours.
+**Nothing, by default.** The only inference traffic goes to the backend you configured:
+
+* `llamacpp` → your own llama.cpp server, loopback or your private tunnel (Tailscale/WireGuard).
+* `ollama` → `http://127.0.0.1:11434` on your own machine; `devmind pull` downloads from Ollama's
+  registry (that download is Ollama's traffic, not yours).
+
+Two other network paths exist, both only when you ask for them:
+
+* **GitHub** (`devmind github …`) — your account, your token, your repositories.
+* **GitHub Actions** (`devmind verify --github …`) — reading workflow results for your repos.
 
 Future steps keep this property:
 
@@ -60,12 +74,15 @@ is itself private information.
 
 ## Encryption status
 
-**Not encrypted at rest yet.** Your memory is protected by your operating system's file
-permissions, like any other dotfile. Field-level encryption with a passphrase (and Google Drive
-snapshots encrypted before upload) is step 7 of the roadmap and will ship with a migration path:
-an `encrypted` marker in the DB, `devmind encrypt`/`devmind decrypt`, and a documented key
-derivation (scrypt → AES-GCM). Pretending it is encrypted today would be worse than saying it
-is not.
+| Data | Status |
+|---|---|
+| GitHub token | **Encrypted** — scrypt (n=2^14) → Fernet, file mode `0600` |
+| Memory, index, routing log | **Not encrypted yet** — protected by OS file permissions |
+| Backups / Drive snapshots | Not implemented |
+
+Field-level encryption for memory with a passphrase, and encrypted Drive snapshots, is step 7. It
+will ship with a migration path (`encrypted` marker in the DB, `devmind encrypt`/`decrypt`, scrypt →
+AES-GCM). Pretending it is encrypted today would be worse than saying it is not.
 
 ## What DevMind deliberately does not do
 

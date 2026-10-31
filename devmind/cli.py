@@ -9,22 +9,40 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any
 from collections.abc import Sequence
 
 from . import __version__
-from .backends import BackendUnavailable, DemoBackend, OllamaBackend
+from .backends import (
+    BackendUnavailable,
+    DemoBackend,
+    LlamaCppBackend,
+    OllamaBackend,
+    get_backend,
+)
 from .config import Config
+from .github import (
+    CredentialStore,
+    DeviceFlow,
+    GitHubClient,
+    GitHubError,
+    GitWorkspace,
+    UnsafeBranchError,
+)
 from .hardware import Hardware
+from .indexer import CodeIndexer
 from .memory.retriever import Retriever
 from .memory.store import MemoryStore
 from .prompts import build_messages
-from .registry import Registry
+from .registry import Model, Registry
 from .security import redact
+from .verify import ActionsVerifier, run_local_checks, summarise
 from .router import Router, classify
 
 # --------------------------------------------------------------------- output
@@ -68,6 +86,12 @@ def human_gb(value: float) -> str:
     return f"{value:.1f} GB"
 
 
+def oneline(text: str, limit: int = 160) -> str:
+    """Collapse multi-line backend errors so the doctor table stays readable."""
+    collapsed = " ".join(str(text).split())
+    return collapsed if len(collapsed) <= limit else collapsed[: limit - 1] + "…"
+
+
 # -------------------------------------------------------------------- context
 
 
@@ -80,27 +104,45 @@ class Context:
         self.hardware = Hardware.detect(
             reserve_gb=self.config.hardware.reserve_gb, home=self.config.home
         )
-        self.registry = Registry.load(self.config.registry_override_path)
+        self.demo = bool(getattr(args, "demo", False)) or bool(os.environ.get("DEVMIND_DEMO"))
+        self.registry = self._load_registry()
         self.store = MemoryStore(self.config.db_path, redact=self.config.privacy.redact_secrets)
         self.retriever = Retriever(self.store, self.config.memory)
-        self.demo = bool(getattr(args, "demo", False)) or bool(os.environ.get("DEVMIND_DEMO"))
         self._backend: Any = None
         self._installed: set[str] | None = None
         self._ollama_note = ""
+
+    def _load_registry(self) -> Registry:
+        registry = Registry.load(self.config.registry_override_path)
+        if self.config.backend.kind == "llamacpp" and not self.demo:
+            spec = self.config.llamacpp
+            size = spec.model_size_gb
+            registry.upsert(
+                Model(
+                    id=spec.model,
+                    family="llama.cpp (your model)",
+                    params_b=round(size / 0.62, 1) if size else 7.0,
+                    size_gb=size or 4.7,
+                    roles=("strong-coder", "reasoning", "fast-small"),
+                    quality=max(0.0, min(100.0, spec.model_quality)),
+                    context=spec.context,
+                    license="user-supplied GGUF",
+                    training_ok=False,
+                    strengths=("your own model", "runs on your hardware"),
+                    notes="Configured in [llamacpp]; the server serves one model.",
+                )
+            )
+        return registry
 
     # ------------------------------------------------------------------ backend
     @property
     def backend(self) -> Any:
         if self._backend is None:
-            if self.demo or self.config.offline:
-                self._backend = DemoBackend()
-            else:
-                self._backend = OllamaBackend(
-                    self.config.ollama.base_url,
-                    connect_timeout=self.config.ollama.connect_timeout_s,
-                    request_timeout=self.config.ollama.request_timeout_s,
-                )
+            self._backend = get_backend(self.config, demo=self.demo)
         return self._backend
+
+    def is_single_model_backend(self) -> bool:
+        return isinstance(self.backend, LlamaCppBackend)
 
     @property
     def installed(self) -> set[str]:
@@ -114,13 +156,17 @@ class Context:
             if isinstance(self.backend, DemoBackend):
                 self._installed = set()
                 self._ollama_note = "demo mode: showing the registry only"
-                return self._installed
-            try:
-                self._installed = set(asyncio.run(self.backend.list_models()))
-                self._ollama_note = ""
-            except BackendUnavailable as exc:
-                self._installed = set()
-                self._ollama_note = str(exc)
+            elif isinstance(self.backend, LlamaCppBackend):
+                # A llama.cpp server serves exactly one model; the configured
+                # name is a label, not something we need to probe for routing.
+                self._installed = {self.config.llamacpp.model}
+            else:
+                try:
+                    self._installed = set(asyncio.run(self.backend.list_models()))
+                    self._ollama_note = ""
+                except BackendUnavailable as exc:
+                    self._installed = set()
+                    self._ollama_note = str(exc)
         return self._installed
 
     async def ensure_installed(self) -> set[str]:
@@ -130,14 +176,38 @@ class Context:
         if isinstance(self.backend, DemoBackend):
             self._installed = set()
             self._ollama_note = "demo mode: showing the registry only"
-            return self._installed
-        try:
-            self._installed = set(await self.backend.list_models())
-            self._ollama_note = ""
-        except BackendUnavailable as exc:
-            self._installed = set()
-            self._ollama_note = str(exc)
+        elif isinstance(self.backend, LlamaCppBackend):
+            self._installed = {self.config.llamacpp.model}
+        else:
+            try:
+                self._installed = set(await self.backend.list_models())
+                self._ollama_note = ""
+            except BackendUnavailable as exc:
+                self._installed = set()
+                self._ollama_note = str(exc)
         return self._installed
+
+    def default_repo(self) -> str | None:
+        """Use an indexed repo automatically only when the shell is inside it.
+
+        Anything else would inject code the user did not ask about into the
+        prompt - surprising, and against the "do exactly what was asked" rule.
+        """
+        try:
+            cwd = Path.cwd().resolve()
+        except OSError:
+            return None
+        for repo in self.store.list_repos():
+            root = repo.get("root") or ""
+            if not root:
+                continue
+            try:
+                root_path = Path(root).resolve()
+            except OSError:
+                continue
+            if cwd == root_path or root_path in cwd.parents:
+                return repo["repo"]
+        return None
 
     def router(self, installed: set[str] | None = None) -> Router:
         return Router(
@@ -188,23 +258,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     )
 
     installed: set[str] = set()
+    backend_label = f"Backend ({ctx.backend.name})"
     if isinstance(ctx.backend, DemoBackend):
-        checks.append(("Ollama", "warn", "demo/offline mode — no inference available"))
+        checks.append((backend_label, "warn", "demo/offline mode - no inference available"))
     else:
         try:
-            names = asyncio.run(ctx.backend.list_models())
-            installed = set(names)
-            version = asyncio.run(ctx.backend.version())
-            checks.append(
-                (
-                    "Ollama",
-                    "ok",
-                    f"{config.ollama.base_url} (v{version or '?'}), "
-                    f"{len(names)} model(s) installed",
-                )
-            )
-        except BackendUnavailable as exc:
-            checks.append(("Ollama", "fail", str(exc)))
+            health = asyncio.run(ctx.backend.health())
+        except BackendUnavailable as exc:  # defensive: health() should not raise
+            health = None
+            checks.append((backend_label, "fail", str(exc)))
+        if health is not None:
+            if health.ok:
+                if isinstance(ctx.backend, LlamaCppBackend):
+                    installed = {config.llamacpp.model}
+                else:
+                    installed = set(asyncio.run(ctx.backend.list_models()))
+                detail = health.detail
+                if health.version:
+                    detail += f" (build {health.version})"
+                checks.append((backend_label, "ok", f"{detail}, {len(installed)} model(s)"))
+            else:
+                checks.append((backend_label, "fail", health.detail))
 
     if installed:
         known = [name for name in installed if ctx.registry.get(name)]
@@ -226,11 +300,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             f"{memory_stats['memories']} memories, {memory_stats['episodes']} episodes",
         )
     )
+    code = memory_stats["code"]
+    if code["files"]:
+        checks.append(
+            (
+                "Code index",
+                "ok",
+                f"{code['files']} files, {code['chunks']} chunks, {code['symbols']} symbols",
+            )
+        )
+    else:
+        checks.append(("Code index", "warn", "nothing indexed - run `devmind index .`"))
     checks.append(("Privacy", "ok", "no telemetry, no cloud calls, loopback only"))
 
     symbols = {"ok": paint("✓", _GREEN), "warn": paint("!", _YELLOW), "fail": paint("✗", _RED)}
     for name, state, detail in checks:
-        print(f"  {symbols[state]} {name:<13} {detail}")
+        print(f"  {symbols[state]} {name:<13} {oneline(detail)}")
 
     print()
     print(paint("Hardware summary", _BOLD))
@@ -261,7 +346,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         )
     if suggestion and suggestion.id not in installed:
         print()
-        print(f"  Next step: {paint(f'devmind pull {suggestion.id}', _CYAN)}")
+        if config.backend.kind == "ollama":
+            print(f"  Next step: {paint(f'devmind pull {suggestion.id}', _CYAN)}")
+        else:
+            print(
+                "  Next step: start llama-server with a GGUF model, then set "
+                "[llamacpp] model in the config."
+            )
+            print(
+                paint("  See docs/mobile.md for a copy-pasteable command and tunnel setup.", _DIM)
+            )
     asyncio.run(ctx.aclose())
     failures = [name for name, state, _ in checks if state == "fail"]
     return 0 if not failures else 1
@@ -365,11 +459,15 @@ async def _answer(
     history: list[dict[str, str]] | None = None,
     json_output: bool = False,
     show_route: bool = True,
+    repo: str | None = None,
 ) -> dict[str, Any]:
     """Run one full turn: route → memory → model → stream → record."""
     config = ctx.config
     profile = classify(prompt)
     installed = await ctx.ensure_installed()
+    if ctx.is_single_model_backend():
+        # One llama.cpp server = one model. Routing to anything else is a lie.
+        model = model or ctx.config.llamacpp.model
     decision = ctx.router(installed).route(prompt, model=model)
 
     if decision.model is None:
@@ -403,12 +501,16 @@ async def _answer(
             "this prompt looks like it contains a secret; memory stores a redacted copy, "
             "and it is only sent to your local model"
         )
-    context = ctx.retriever.context_for(prompt)
+    repo = repo or ctx.default_repo()
+    context = ctx.retriever.context_for(prompt, repo=repo)
     if context and show_route and not json_output:
-        info(
-            f"memory: {len(context.hits)} item(s) injected "
-            f"({', '.join(hit.kind for hit in context.hits[:4])})"
-        )
+        parts = []
+        if context.hits:
+            parts.append(f"{len(context.hits)} memory item(s)")
+        if context.code_hits:
+            parts.append(f"{len(context.code_hits)} code chunk(s) from {repo}")
+        if parts:
+            info("context: " + ", ".join(parts))
     captured = ctx.retriever.capture_preferences(prompt, session=session)
     if captured and not json_output:
         info(f"learned {len(captured)} preference(s) — `devmind memory` to review")
@@ -521,8 +623,17 @@ def cmd_ask(args: argparse.Namespace) -> int:
         fail('Nothing to ask. Example: devmind ask "write a Python retry decorator"')
         return 2
     ctx = Context(args)
+    repo = None
+    if getattr(args, "repo", None):
+        root = Path(args.repo).expanduser().resolve()
+        report = CodeIndexer(ctx.store, ctx.config.index).index(root)
+        repo = report.repo
+        if not args.json:
+            info(f"index: {report.summary()}")
     try:
-        result = asyncio.run(_answer(ctx, prompt, model=args.model, json_output=args.json))
+        result = asyncio.run(
+            _answer(ctx, prompt, model=args.model, json_output=args.json, repo=repo)
+        )
     finally:
         asyncio.run(ctx.aclose())
     if result.get("error") == "model-not-downloaded":
@@ -650,8 +761,12 @@ def cmd_forget(args: argparse.Namespace) -> int:
 
 async def _pull(ctx: Context, model_id: str) -> int:
     backend = ctx.backend
-    if isinstance(backend, DemoBackend):
-        fail("Pulling requires Ollama; demo mode is active.")
+    if not isinstance(backend, OllamaBackend):
+        fail(
+            "`devmind pull` is an Ollama feature. With the llama.cpp backend, download a "
+            "GGUF from Hugging Face and pass it to llama-server -m; with the PWA, the "
+            "model is downloaded in the browser."
+        )
         return 2
     spec = ctx.registry.get(model_id)
     if spec and not spec.fits(ctx.hardware):
@@ -731,6 +846,318 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- code index
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    ctx = Context(args)
+    root = Path(args.path or os.getcwd()).expanduser().resolve()
+    try:
+        report = CodeIndexer(ctx.store, ctx.config.index).index(
+            root,
+            repo=args.repo,
+            force=args.force,
+        )
+    except NotADirectoryError as exc:
+        fail(str(exc))
+        asyncio.run(ctx.aclose())
+        return 2
+    asyncio.run(ctx.aclose())
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+    print(f"{'✓' if report.complete else '…'} {report.summary()}")
+    for error in report.errors[:5]:
+        warn(error)
+    if not report.complete:
+        info("run `devmind index` again to continue - progress is saved")
+    if report.chunks:
+        info("ask with project context: devmind ask --repo " + report.root + ' "..."')
+    return 0
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    ctx = Context(args)
+    repo = args.repo or ctx.default_repo()
+    if repo is None:
+        indexed = [entry["repo"] for entry in ctx.store.list_repos()]
+        if indexed:
+            fail(f"Pass --repo NAME. Indexed repositories: {', '.join(indexed)}")
+        else:
+            fail("No repository indexed yet. Run `devmind index .` first.")
+        asyncio.run(ctx.aclose())
+        return 2
+    query = " ".join(args.query) if isinstance(args.query, list) else args.query
+    hits = ctx.store.search_code(query, repo=repo, top_k=args.k)
+    asyncio.run(ctx.aclose())
+    if args.json:
+        print(json.dumps([hit.to_dict() for hit in hits], indent=2))
+        return 0
+    if not hits:
+        print("No matches in the index.")
+        return 0
+    rows = []
+    for hit in hits:
+        first_line = next((line.strip() for line in hit.text.splitlines() if line.strip()), "")[:70]
+        rows.append(
+            [
+                f"{hit.path}:{hit.start_line}-{hit.end_line}",
+                hit.symbol or hit.kind,
+                f"{hit.score:.2f}",
+                first_line,
+            ]
+        )
+    print(table(["location", "symbol", "score", "content"], rows))
+    return 0
+
+
+def cmd_repos(args: argparse.Namespace) -> int:
+    ctx = Context(args)
+    repos = ctx.store.list_repos()
+    asyncio.run(ctx.aclose())
+    if args.json:
+        print(json.dumps(repos, indent=2))
+        return 0
+    if not repos:
+        print("Nothing indexed. Run `devmind index .` in a project.")
+        return 0
+    rows = [
+        [
+            repo["repo"],
+            str(repo["files"]),
+            str(repo["chunks"]),
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(repo["updated_at"] or 0)),
+            repo["root"],
+        ]
+        for repo in repos
+    ]
+    print(table(["repo", "files", "chunks", "indexed", "path"], rows))
+    return 0
+
+
+# -------------------------------------------------------------------- github
+
+
+def _passphrase(confirm: bool = False) -> str:
+    from_env = os.environ.get("DEVMIND_PASSPHRASE")
+    if from_env:
+        return from_env
+    passphrase = getpass.getpass("DevMind passphrase (protects your GitHub token): ")
+    if confirm and getpass.getpass("Repeat passphrase: ") != passphrase:
+        raise GitHubError("Passphrases did not match.")
+    return passphrase
+
+
+def _github_client(ctx: Context) -> tuple[GitHubClient, dict]:
+    credentials = CredentialStore(ctx.config.credentials_path)
+    payload = credentials.load(_passphrase())
+    return (
+        GitHubClient(payload["token"], api_url=ctx.config.github.api_url),
+        payload,
+    )
+
+
+def cmd_github(args: argparse.Namespace) -> int:
+    ctx = Context(args)
+    credentials = CredentialStore(ctx.config.credentials_path)
+    action = args.action
+    try:
+        if action == "logout":
+            print(paint("✓ token deleted", _GREEN) if credentials.delete() else "Nothing stored.")
+            return 0
+
+        if action == "login":
+            token = args.token or ""
+            if not token:
+                client_id = args.client_id or ctx.config.github.client_id
+                if not client_id:
+                    fail(
+                        "No OAuth client id configured. Either create a free OAuth App at "
+                        "https://github.com/settings/developers and set [github] client_id, "
+                        "or pass a fine-grained token with `devmind github login --token`."
+                    )
+                    return 2
+                flow = DeviceFlow(client_id)
+                try:
+                    code = flow.start(ctx.config.github.scopes)
+                    print(code.instructions)
+                    warn("waiting for approval (Ctrl-C cancels) …")
+                    token = flow.poll(code)
+                finally:
+                    flow.close()
+            client = GitHubClient(token, api_url=ctx.config.github.api_url)
+            try:
+                user = client.whoami()
+            finally:
+                client.close()
+            passphrase = _passphrase(confirm=True)
+            credentials.save(
+                token,
+                passphrase,
+                login=str(user.get("login", "")),
+                scopes=ctx.config.github.scopes,
+            )
+            ok(f"logged in as {user.get('login')} (token encrypted at {credentials.path})")
+            return 0
+
+        if action == "status":
+            if not credentials.exists():
+                print("Not logged in. Run `devmind github login`.")
+                return 1
+            client, payload = _github_client(ctx)
+            try:
+                user = client.whoami()
+                repos = client.list_repos(max_pages=1)
+            finally:
+                client.close()
+            print(f"logged in as {user.get('login')} (stored login: {payload.get('login')})")
+            print(f"token file: {credentials.path}")
+            print(f"repositories visible: {len(repos)} (first page)")
+            return 0
+
+        if action == "repos":
+            client, _ = _github_client(ctx)
+            try:
+                repos = client.list_repos()
+            finally:
+                client.close()
+            if args.json:
+                print(json.dumps(repos, indent=2))
+                return 0
+            rows = [
+                [
+                    repo["full_name"],
+                    "private" if repo["private"] else "public",
+                    repo["default_branch"],
+                    repo["language"],
+                    repo["updated_at"][:10],
+                ]
+                for repo in repos
+            ]
+            print(table(["repo", "visibility", "default", "lang", "updated"], rows))
+            return 0
+
+        if action == "clone":
+            if not args.repo:
+                fail("Name the repository: devmind github clone owner/name")
+                return 2
+            client, payload = _github_client(ctx)
+            try:
+                default = client.default_branch(args.repo)
+            finally:
+                client.close()
+            destination = Path(
+                args.dest or ctx.config.home / "repos" / args.repo.replace("/", "__")
+            )
+            workspace = GitWorkspace(destination.parent, token=payload["token"])
+            path = workspace.clone(args.repo, destination)
+            ok(f"cloned {args.repo} ({default} branch) into {path}")
+            return 0
+
+        if action == "pr":
+            if not (args.repo and args.branch and args.title and args.path):
+                fail("Need --repo, --branch, --title and --path (an existing clone).")
+                return 2
+            client, payload = _github_client(ctx)
+            try:
+                default = client.default_branch(args.repo)
+            finally:
+                client.close()
+            ensure = __import__("devmind.github", fromlist=["ensure_safe_branch"])
+            ensure.ensure_safe_branch(args.branch, default)
+
+            workspace = GitWorkspace(args.path, token=payload["token"])
+            changes = workspace.status(cwd=args.path)
+            if not changes:
+                fail("Nothing to commit in that clone.")
+                return 1
+            workspace.create_branch(args.branch, base=default, cwd=args.path)
+            commit = workspace.commit(args.message or args.title, cwd=args.path)
+            workspace.push(args.branch, default_branch=default, cwd=args.path)
+
+            client = GitHubClient(payload["token"], api_url=ctx.config.github.api_url)
+            try:
+                pull = client.create_pull(
+                    args.repo,
+                    title=args.title,
+                    head=args.branch,
+                    base=default,
+                    body=args.body or "Proposed by DevMind. Tests were run locally.",
+                    draft=args.draft,
+                )
+            finally:
+                client.close()
+            ok(f"opened PR #{pull.get('number')} → {pull.get('html_url')}")
+            info(f"commit {commit[:10]} on {args.branch} (base {default})")
+            return 0
+
+        fail(f"Unknown github action '{action}'.")
+        return 2
+    except (GitHubError, UnsafeBranchError) as exc:
+        fail(str(exc))
+        return 1
+    finally:
+        asyncio.run(ctx.aclose())
+
+
+# ------------------------------------------------------------------- verify
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    ctx = Context(args)
+    try:
+        if args.github:
+            client, _ = _github_client(ctx)
+            verifier = ActionsVerifier(client)
+            started = time.time()
+            try:
+                if args.workflow:
+                    print(f"dispatching {args.workflow} on {args.ref} …")
+                    verifier.trigger(args.github, args.workflow, args.ref)
+                result = verifier.wait(
+                    args.github,
+                    branch=args.ref,
+                    workflow=args.workflow,
+                    timeout=args.timeout,
+                    started_after=started - (300 if not args.workflow else 0),
+                )
+            finally:
+                client.close()
+            if args.json:
+                print(json.dumps(result.to_dict(), indent=2))
+            else:
+                mark = paint("✓", _GREEN) if result.ok else paint("✗", _RED)
+                print(f"{mark} GitHub Actions: {result.conclusion} {result.url}")
+                for step in result.failed_steps:
+                    print(f"   failed: {step}")
+                if result.detail:
+                    info(result.detail)
+            return 0 if result.ok else 1
+
+        root = Path(args.path or os.getcwd()).expanduser().resolve()
+        results = run_local_checks(root, timeout=args.timeout)
+        if args.json:
+            print(json.dumps([result.to_dict() for result in results], indent=2))
+        else:
+            for result in results:
+                if result.skipped:
+                    warn(f"{result.name}: skipped - {result.skipped_reason}")
+                    continue
+                mark = paint("✓", _GREEN) if result.ok else paint("✗", _RED)
+                print(f"{mark} {result.name} ({result.duration_ms:.0f} ms)")
+                if not result.ok:
+                    print(result.output[-1500:])
+            print()
+            print(summarise(results))
+        return 0 if all(result.ok for result in results if not result.skipped) else 1
+    except GitHubError as exc:
+        fail(str(exc))
+        return 1
+    finally:
+        asyncio.run(ctx.aclose())
+
+
 # --------------------------------------------------------------------- parser
 
 
@@ -779,6 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask", help="ask a one-shot question", parents=[common])
     ask.add_argument("prompt", nargs="+")
     ask.add_argument("-m", "--model", help="force a model id")
+    ask.add_argument("--repo", metavar="PATH", help="index this repository and cite it")
     ask.add_argument("--json", action="store_true")
     ask.set_defaults(func=cmd_ask)
 
@@ -815,6 +1243,56 @@ def build_parser() -> argparse.ArgumentParser:
     config.add_argument("--init", action="store_true")
     config.add_argument("--path", action="store_true")
     config.set_defaults(func=cmd_config)
+
+    index = sub.add_parser("index", help="index a repository for citable context", parents=[common])
+    index.add_argument("path", nargs="?", help="repository root (default: current directory)")
+    index.add_argument("--repo", help="name to store it under (default: folder name)")
+    index.add_argument("--force", action="store_true", help="re-index unchanged files")
+    index.add_argument("--json", action="store_true")
+    index.set_defaults(func=cmd_index)
+
+    search = sub.add_parser(
+        "search", help="search indexed code (file:line results)", parents=[common]
+    )
+    search.add_argument("query", nargs="+")
+    search.add_argument("--repo")
+    search.add_argument("-k", "--top-k", dest="k", type=int, default=6)
+    search.add_argument("--json", action="store_true")
+    search.set_defaults(func=cmd_search)
+
+    repos = sub.add_parser("repos", help="list indexed repositories", parents=[common])
+    repos.add_argument("--json", action="store_true")
+    repos.set_defaults(func=cmd_repos)
+
+    github = sub.add_parser(
+        "github",
+        help="login, list, clone and open pull requests (your own account)",
+        parents=[common],
+    )
+    github.add_argument("action", choices=["login", "status", "logout", "repos", "clone", "pr"])
+    github.add_argument("--repo", help="owner/name")
+    github.add_argument("--dest", help="clone destination")
+    github.add_argument("--branch", help="new branch name for the pull request")
+    github.add_argument("--title")
+    github.add_argument("--body")
+    github.add_argument("--message", help="commit message (defaults to the title)")
+    github.add_argument("--path", help="existing clone to commit from")
+    github.add_argument("--token", help="fine-grained personal access token")
+    github.add_argument("--client-id", help="OAuth App client id override")
+    github.add_argument("--draft", action="store_true")
+    github.add_argument("--json", action="store_true")
+    github.set_defaults(func=cmd_github)
+
+    verify = sub.add_parser(
+        "verify", help="run project tests locally or read GitHub Actions", parents=[common]
+    )
+    verify.add_argument("path", nargs="?", help="project root for local checks")
+    verify.add_argument("--github", metavar="OWNER/REPO", help="read Actions for this repo")
+    verify.add_argument("--ref", default="main", help="branch to check on GitHub")
+    verify.add_argument("--workflow", help="workflow file to dispatch, e.g. test.yml")
+    verify.add_argument("--timeout", type=float, default=900)
+    verify.add_argument("--json", action="store_true")
+    verify.set_defaults(func=cmd_verify)
 
     stats = sub.add_parser(
         "stats", help="memory stats and recent routing decisions", parents=[common]

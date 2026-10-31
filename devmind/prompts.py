@@ -25,8 +25,9 @@ NON-NEGOTIABLE RULES
    dependencies, or "improvements". Preserve the user's naming, structure and style.
 3. Prefer the user's existing stack. Do not add a dependency unless the user asked for one;
    if a library is required, say so and explain why before using it.
-4. When you rely on remembered context, cite it like [M1]. When you rely on an assumption
-   you cannot verify, label it: "Assumption: ...".
+4. When you rely on remembered context, cite it like [M1]; when you rely on code from the
+   project index, cite it like [C1] with its file:line. When you rely on an assumption you
+   cannot verify, label it: "Assumption: ...".
 5. If the request is genuinely ambiguous and guessing would waste the user's time, ask at
    most three short questions instead of writing code.
 6. Code must be complete and runnable: imports included, no "..." placeholders, no
@@ -35,7 +36,10 @@ NON-NEGOTIABLE RULES
 8. Never fabricate benchmark numbers, GitHub links, changelog entries or quotes.
 9. Keep prose short. Explain only what is needed to use or verify the code.
 10. You have no internet access. Everything you claim must come from the user's message,
-    the provided memory, or your own knowledge — with uncertainty stated when relevant.
+    the provided memory, the provided code, or your own knowledge - with uncertainty stated
+    when relevant.
+11. The code index only contains files DevMind actually read. Never cite a path you were not
+    given, and never claim a symbol exists because it "usually" does.
 """
 
 TASK_GUIDANCE: dict[Task, str] = {
