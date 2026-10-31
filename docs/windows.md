@@ -53,12 +53,34 @@ Installer has been removed. You do not need it.
 
 ### Option A — Ollama (simplest)
 
-Download and run the installer:
+Download and run the installer. It is **large** (roughly 700 MB - 1 GB, because it bundles the GPU
+runtimes), so a slow line takes a while; that is the download, not a hang.
 
 ```powershell
+# The progress bar makes Invoke-WebRequest several times slower - turn it off.
+$ProgressPreference = 'SilentlyContinue'
 Invoke-WebRequest https://ollama.com/download/OllamaSetup.exe -OutFile "$env:TEMP\OllamaSetup.exe"
 Start-Process "$env:TEMP\OllamaSetup.exe"
 ```
+
+Faster and resumable (works if the first attempt was interrupted):
+
+```powershell
+curl.exe -L --retry 3 -C - -o "$env:TEMP\OllamaSetup.exe" https://ollama.com/download/OllamaSetup.exe
+```
+
+Or use `Start-BitsTransfer -Source https://ollama.com/download/OllamaSetup.exe -Destination "$env:TEMP\OllamaSetup.exe"`,
+or just download it in your browser from <https://ollama.com/download>.
+
+To see how far it got, in a second PowerShell window:
+
+```powershell
+(Get-Item "$env:TEMP\OllamaSetup.exe").Length / 1MB
+```
+
+Run it once the size stops growing at roughly its final value (the browser download page shows the
+expected size). `Invoke-WebRequest` prints `Number of bytes written: …` as it goes; Ctrl+C cancels it
+and `curl -C -` resumes from that partial file.
 
 Finish the installer, then **close and reopen PowerShell** (PATH is only refreshed in a new window).
 

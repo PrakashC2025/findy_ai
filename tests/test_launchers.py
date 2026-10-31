@@ -90,4 +90,6 @@ def test_windows_guide_covers_the_missing_winget_case() -> None:
     assert "OllamaSetup.exe" in guide
     assert "does not exist on older Windows 10" in guide
     assert "curl.exe" in guide
+    assert "ProgressPreference" in guide, "IWR's progress bar is why the download crawls"
+    assert "Start-BitsTransfer" in guide
     assert "Apache" in guide
