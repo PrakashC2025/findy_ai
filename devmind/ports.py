@@ -8,7 +8,7 @@ no-proxy rule as the local backend.
 
 from __future__ import annotations
 
-import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
@@ -19,6 +19,10 @@ LLAMA = "llama.cpp"
 OPENAI = "openai-compatible"
 WEB = "other web app"
 CLOSED = "closed"
+
+# Ports worth checking when nothing is configured correctly. 8080 is llama.cpp's
+# usual port, 11434 is Ollama, 1234 is LM Studio.
+DEFAULT_PORTS = (*range(8080, 8091), 11434, 1234)
 
 
 @dataclass(frozen=True)
@@ -45,21 +49,21 @@ def _model_ids(payload: object) -> list[str]:
     return [str(entry["id"]) for entry in entries if isinstance(entry, dict) and entry.get("id")]
 
 
-async def probe_port(port: int, *, transport: httpx.BaseTransport | None = None) -> PortReport:
+def probe_port(port: int, *, transport: httpx.BaseTransport | None = None) -> PortReport:
     """Classify one port: llama.cpp, another OpenAI server, another web app, or free."""
     timeout = httpx.Timeout(1.0, connect=0.4)
-    async with httpx.AsyncClient(
+    with httpx.Client(
         base_url=f"http://127.0.0.1:{port}",
         timeout=timeout,
         trust_env=False,
         transport=transport,
     ) as client:
         try:
-            models = await client.get("/v1/models")
+            models = client.get("/v1/models")
         except httpx.HTTPError:
             return PortReport(port, CLOSED, "nothing is listening")
 
-        ids = []
+        ids: list[str] = []
         if models.status_code == 200:
             try:
                 ids = _model_ids(models.json())
@@ -68,7 +72,7 @@ async def probe_port(port: int, *, transport: httpx.BaseTransport | None = None)
         if ids:
             listed = ", ".join(ids[:3]) + (" …" if len(ids) > 3 else "")
             try:
-                health = await client.get("/health")
+                health = client.get("/health")
             except httpx.HTTPError:
                 health = None
             is_llama = False
@@ -83,7 +87,7 @@ async def probe_port(port: int, *, transport: httpx.BaseTransport | None = None)
 
         # Not a model server. Ask for the root page so the user can recognise it.
         try:
-            root = await client.get("/")
+            root = client.get("/")
         except httpx.HTTPError:
             return PortReport(port, WEB, f"HTTP {models.status_code} on /v1/models")
         bits = [f"HTTP {root.status_code} on /"]
@@ -94,7 +98,35 @@ async def probe_port(port: int, *, transport: httpx.BaseTransport | None = None)
         return PortReport(port, WEB, " · ".join(bits))
 
 
-async def scan(
-    ports: list[int] | range, *, transport: httpx.BaseTransport | None = None
+def scan(
+    ports: list[int] | range | tuple[int, ...], *, transport: httpx.BaseTransport | None = None
 ) -> list[PortReport]:
-    return list(await asyncio.gather(*(probe_port(port, transport=transport) for port in ports)))
+    """Probe several ports in parallel, preserving the order asked for."""
+    ports = list(ports)
+    if not ports:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(ports))) as pool:
+        return list(pool.map(lambda port: probe_port(port, transport=transport), ports))
+
+
+def find_local_model(
+    ports: list[int] | range | tuple[int, ...] = DEFAULT_PORTS,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> PortReport | None:
+    """The first usable local model server, preferring llama.cpp over other APIs."""
+    reports = scan(ports, transport=transport)
+    for report in reports:
+        if report.kind == LLAMA:
+            return report
+    return next((report for report in reports if report.kind == OPENAI), None)
+
+
+def port_of(url: str) -> int | None:
+    """The port of a base URL, defaulting like the scheme (http 80, https 443)."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url if "//" in url else f"//{url}")
+    if parsed.port:
+        return parsed.port
+    return {"http": 80, "https": 443}.get(parsed.scheme or "http")

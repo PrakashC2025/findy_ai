@@ -89,6 +89,11 @@
       pill.className = "pill " + (data.demo || !healthy ? "bad" : "ok");
       pill.title = `backend ${data.backend} · cache ${data.counts.cache.entries} · sandbox: ${data.sandbox.join(" · ")}`;
       showHealth(data);
+      const note = $("model-note");
+      if (note) {
+        note.hidden = !data.model_note;
+        note.textContent = data.model_note || "";
+      }
     } catch (error) {
       pill.textContent = "offline";
       pill.className = "pill bad";
@@ -105,6 +110,46 @@
     }
     banner.hidden = false;
     $("backend-alert-text").textContent = data.health.detail;
+  }
+
+  async function scanPorts() {
+    const out = $("backend-scan-out");
+    out.hidden = false;
+    out.textContent = "checking 8080-8090, 11434 (Ollama) and 1234 (LM Studio)…";
+    try {
+      const response = await api("/api/ports");
+      const data = await response.json();
+      const lines = data.ports.map(
+        (entry) => `${entry.port}  ${entry.kind.padEnd(18)} ${entry.detail}`
+      );
+      const model = data.ports.find(
+        (entry) => entry.kind === "llama.cpp" || entry.kind === "openai-compatible"
+      );
+      const free = data.ports.find((entry) => entry.free);
+      if (model) {
+        lines.push(
+          "",
+          `A model server is on port ${model.port}.`,
+          `Set  [llamacpp] base_url = "http://127.0.0.1:${model.port}"  and restart DevMind.`
+        );
+      } else {
+        lines.push("", "No model server found on this machine.");
+        if (free) {
+          lines.push(
+            `Start one on the free port ${free.port}:`,
+            `  llama-server -m <your-model.gguf> --port ${free.port} -c 16384 -ngl 99`,
+            `  then set  [llamacpp] base_url = "http://127.0.0.1:${free.port}"`
+          );
+        }
+        lines.push(
+          "No GGUF yet? Ollama is the shortest path:",
+          "  ollama pull qwen2.5-coder:7b   then   [backend] kind = \"ollama\""
+        );
+      }
+      out.textContent = lines.join("\n");
+    } catch (error) {
+      out.textContent = String(error.message || error);
+    }
   }
 
   // ------------------------------------------------------------------ repos
@@ -544,6 +589,7 @@
   };
   $("refresh-btn").onclick = async () => { await loadRepos(); await loadStatus(); };
   $("backend-retry").onclick = async () => { await loadStatus(); };
+  $("backend-scan").onclick = scanPorts;
   $("open-btn").onclick = openFolder;
   $("clone-btn").onclick = cloneRepo;
   $("git-input").addEventListener("keydown", (event) => { if (event.key === "Enter") cloneRepo(); });

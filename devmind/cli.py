@@ -1042,7 +1042,7 @@ def cmd_ports(args: argparse.Namespace) -> int:
     from .ports import LLAMA, OPENAI, scan
 
     ports = list(range(args.start, args.end + 1))
-    reports = asyncio.run(scan(ports))
+    reports = scan(ports)
 
     rows = []
     for report in reports:

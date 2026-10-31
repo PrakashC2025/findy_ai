@@ -36,7 +36,11 @@ class BackendConfig:
     speaks the same interface from the browser side.
     """
 
-    kind: str = "llamacpp"  # llamacpp | ollama | demo
+    kind: str = "llamacpp"  # llamacpp | ollama | demo | remote
+    # When the configured local server is not answering, look for another one on
+    # this machine (8080-8090, Ollama's 11434, LM Studio's 1234) and use it, with
+    # a visible note. Set false if you want a strict "configured address only".
+    autodetect: bool = True
 
 
 @dataclass

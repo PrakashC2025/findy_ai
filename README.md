@@ -10,7 +10,7 @@ No telemetry.
 
 ```
 $ devmind serve --open           # or double-click scripts/devmind.command / .bat
-DevMind 0.5.2 on http://127.0.0.1:8787
+DevMind 0.6.0 on http://127.0.0.1:8787
 
 $ devmind index .
 ✓ shop: 214 indexed, 0 unchanged, 0 removed, 3120 chunks, 2680 symbols in 8.3s - complete
@@ -117,7 +117,10 @@ devmind serve --host 0.0.0.0          # phone on the same Wi-Fi; prints a token 
 
 Or double-click **`START-DEVMIND.bat`** (Windows) or **`START-DEVMIND.command`** (macOS) at the top of
 the folder — Linux users run `bash scripts/devmind.sh`. The first run creates `.venv`, installs the
-dependencies, starts the server and opens the browser; the window must stay open. If nothing happens,
+dependencies, starts the server and opens the browser; the window must stay open. If the configured
+model address has nothing on it, DevMind looks for a model on 8080-8090, Ollama's 11434 and LM
+Studio's 1234 and says which one it used — or the app's **Find a model** button tells you where to
+start one. If nothing happens,
 [docs/web.md](docs/web.md#if-double-click-does-nothing) lists the cause and the fix for each symptom.
 
 The same UI works on both: streamed answers with citations and confidence, a project bar that

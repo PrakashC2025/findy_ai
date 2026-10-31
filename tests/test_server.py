@@ -271,7 +271,9 @@ def test_clone_twice_still_indexes_and_reports_counts(tmp_path: Path) -> None:
 def test_ui_explains_a_dead_model_server(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir(parents=True)
-    (home / "config.toml").write_text('[llamacpp]\nbase_url = "http://127.0.0.1:9"\n')
+    (home / "config.toml").write_text(
+        '[backend]\nautodetect = false\n\n[llamacpp]\nbase_url = "http://127.0.0.1:9"\n'
+    )
     app = create_app(home=home, demo=False, allow_roots=[str(tmp_path)])
 
     async def go() -> None:
@@ -285,3 +287,42 @@ def test_ui_explains_a_dead_model_server(tmp_path: Path) -> None:
     scripts = _request(app, "GET", "/static/app.js").text
     assert "showHealth" in scripts
     assert "clone-note" in scripts
+
+
+def test_a_model_on_another_port_is_found_and_announced(tmp_path: Path, monkeypatch) -> None:
+    from devmind.ports import LLAMA, PortReport
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text('[llamacpp]\nbase_url = "http://127.0.0.1:9"\n')
+    monkeypatch.setattr(
+        "devmind.server.find_local_model",
+        lambda *args, **kwargs: PortReport(8099, LLAMA, "1 model(s): demo"),
+    )
+    app = create_app(home=home, demo=False, allow_roots=[str(tmp_path)])
+    payload = _request(app, "GET", "/api/status").json()
+    assert "8099" in payload["model_note"]
+    assert payload["health"]["base_url"].endswith(":8099")
+
+
+def test_autodetect_can_be_switched_off(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text(
+        '[backend]\nautodetect = false\n\n[llamacpp]\nbase_url = "http://127.0.0.1:9"\n'
+    )
+
+    def explode(*args, **kwargs):
+        raise AssertionError("autodetect is off; it must not scan ports")
+
+    monkeypatch.setattr("devmind.server.find_local_model", explode)
+    app = create_app(home=home, demo=False, allow_roots=[str(tmp_path)])
+    payload = _request(app, "GET", "/api/status").json()
+    assert payload["model_note"] == ""
+
+
+def test_ports_endpoint_reports_a_closed_port(tmp_path: Path) -> None:
+    payload = _request(_app(tmp_path), "GET", "/api/ports?start=1&end=1").json()
+    assert payload["ports"][0]["port"] == 1
+    assert payload["ports"][0]["kind"] == "closed"
+    assert payload["ports"][0]["free"] is True

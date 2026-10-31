@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import httpx
 
-from devmind.ports import CLOSED, LLAMA, OPENAI, WEB, probe_port, scan
+from devmind.ports import CLOSED, LLAMA, OPENAI, WEB, find_local_model, port_of, probe_port, scan
 
 
 def _handler(request: httpx.Request) -> httpx.Response:
@@ -31,7 +29,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
 
 
 def _probe(port: int):
-    return asyncio.run(probe_port(port, transport=httpx.MockTransport(_handler)))
+    return probe_port(port, transport=httpx.MockTransport(_handler))
 
 
 def test_llama_cpp_is_recognised() -> None:
@@ -62,6 +60,28 @@ def test_free_port() -> None:
 
 
 def test_scan_keeps_the_requested_order() -> None:
-    reports = asyncio.run(scan([8084, 8081, 8083], transport=httpx.MockTransport(_handler)))
+    reports = scan([8084, 8081, 8083], transport=httpx.MockTransport(_handler))
     assert [report.port for report in reports] == [8084, 8081, 8083]
     assert [report.kind for report in reports] == [CLOSED, LLAMA, WEB]
+
+
+def test_find_local_model_prefers_llama_cpp() -> None:
+    found = find_local_model([8084, 8082, 8081], transport=httpx.MockTransport(_handler))
+    assert found is not None
+    assert (found.port, found.kind) == (8081, LLAMA)
+
+
+def test_find_local_model_falls_back_to_any_openai_server() -> None:
+    found = find_local_model([8084, 8082], transport=httpx.MockTransport(_handler))
+    assert found is not None
+    assert found.kind == OPENAI
+
+
+def test_find_local_model_returns_none_when_nothing_answers() -> None:
+    assert find_local_model([8084, 8085], transport=httpx.MockTransport(_handler)) is None
+
+
+def test_port_of_understands_defaults() -> None:
+    assert port_of("http://127.0.0.1:8080") == 8080
+    assert port_of("https://home-pc.example.ts.net") == 443
+    assert port_of("localhost:11434") == 11434

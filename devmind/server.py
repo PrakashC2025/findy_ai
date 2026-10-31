@@ -46,6 +46,7 @@ from .languages import project_packs, style_block
 from .memory.retriever import Retriever
 from .memory.store import MemoryStore
 from .pipeline import AnswerPipeline
+from .ports import find_local_model, port_of, probe_port, scan
 from .prompts import build_messages
 from .registry import Registry
 from .repair import SelfRepairer, apply_diff
@@ -124,10 +125,46 @@ class Runtime:
             reserve_gb=self.config.hardware.reserve_gb, home=self.config.home
         )
         self.backend = get_backend(self.config, demo=self.demo)
+        self.model_note = self._autodetect_local_model()
         roots = [Path(item).expanduser().resolve() for item in (allow_roots or [])]
         self.allow_roots = roots or [Path.cwd().resolve(), Path.home().resolve(), self.config.home]
         self._installed: set[str] | None = None
         self._style: dict[str, tuple[str, list[str]]] = {}
+
+    def _autodetect_local_model(self) -> str:
+        """If the configured local address has no model, look around this machine.
+
+        Only local providers are affected, only when the user kept
+        ``[backend] autodetect`` on, and the switch is always announced - never a
+        silent redirect of your code.
+        """
+        if self.demo or not self.config.backend.autodetect:
+            return ""
+        kind = self.config.backend.kind
+        if kind not in {"llamacpp", "ollama"}:
+            return ""
+        configured = (
+            self.config.llamacpp.base_url if kind == "llamacpp" else self.config.ollama.base_url
+        )
+        configured_port = port_of(configured)
+        if configured_port is not None and probe_port(configured_port).usable:
+            return ""  # the configured address is fine: do nothing
+        found = find_local_model()
+        if found is None or found.port == configured_port:
+            return ""
+        from .backends import LlamaCppBackend
+
+        self.backend = LlamaCppBackend(
+            f"http://127.0.0.1:{found.port}",
+            model=self.config.llamacpp.model,
+            connect_timeout=self.config.llamacpp.connect_timeout_s,
+            request_timeout=self.config.llamacpp.request_timeout_s,
+        )
+        return (
+            f"{configured} has no model server; using {found.kind} found on "
+            f"http://127.0.0.1:{found.port}. Set [llamacpp] base_url to that address "
+            "to make it permanent (or [backend] autodetect = false to stop guessing)."
+        )
 
     async def installed(self) -> set[str]:
         if self._installed is None:
@@ -238,6 +275,7 @@ class Runtime:
             "sandbox": scan_protections(SandboxLimits()),
             "roots": [str(root) for root in self.allow_roots],
             "offline": self.config.offline,
+            "model_note": self.model_note,
         }
 
 
@@ -266,6 +304,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+        if runtime.model_note:
+            print(f"DevMind: {runtime.model_note}")
         if not runtime.demo:
             try:
                 health = await runtime.backend.health()
@@ -343,6 +383,24 @@ def create_app(
             payload["health"] = {"ok": False, "detail": str(exc), "version": "", "models": 0}
         payload["health"]["base_url"] = getattr(runtime.backend, "base_url", "")
         return payload
+
+    @app.get("/api/ports")
+    async def api_ports(start: int = 8080, end: int = 8090) -> dict[str, Any]:
+        """What is listening on this machine, for the "find a model" button."""
+        if start < 1 or end < start or end - start > 60:
+            raise HTTPException(status_code=400, detail="use a range of at most 61 ports")
+        reports = await asyncio.to_thread(scan, list(range(start, end + 1)))
+        return {
+            "ports": [
+                {
+                    "port": report.port,
+                    "kind": report.kind,
+                    "detail": report.detail,
+                    "free": report.free,
+                }
+                for report in reports
+            ]
+        }
 
     @app.get("/api/repos")
     async def api_repos() -> list[dict[str, Any]]:

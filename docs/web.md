@@ -84,7 +84,7 @@ devmind serve --host 0.0.0.0 --port 8787
 The terminal prints two URLs:
 
 ```
-DevMind 0.5.2 on http://127.0.0.1:8787
+DevMind 0.6.0 on http://127.0.0.1:8787
 Open: http://127.0.0.1:8787/?token=6Qk...
 Phone (same Wi-Fi): http://192.168.1.24:8787/?token=6Qk...
 ```
@@ -166,6 +166,9 @@ still writing, and a later `replace` event upgrades the answer if the pipeline f
   at the top of the page with a **Retry** button, and a failed answer shows the same text. The banner
   names the page title and `Server` header it found, and `devmind ports` classifies 8080-8090 for
   you. Loopback traffic never goes through `HTTP_PROXY`, so a proxy cannot fake a local model.
+  **Find a model** in that banner runs the same scan in the app and tells you which port to use; if
+  DevMind found a model on a different local port at startup, a green line under the project bar says
+  so (see [models.md](models.md#if-the-configured-address-has-no-model)).
 * **A remote provider is opt-in and server-side.** `/api/status` reports `cloud: true` only when a
   configured remote endpoint is usable; the browser never sees the key. See
   [remote.md](remote.md).
