@@ -22,9 +22,9 @@ from . import __version__
 from .backends import (
     BackendUnavailable,
     DemoBackend,
-    LlamaCppBackend,
     OllamaBackend,
     get_backend,
+    register_remote_models,
 )
 from .confidence import assess
 from .config import Config
@@ -45,6 +45,8 @@ from .memory.store import MemoryStore
 from .prompts import build_messages
 from .registry import Model, Registry
 from .repair import SelfRepairer, apply_diff
+from .starters import available as starter_kinds
+from .starters import starter, write_starter
 from .sandbox import Sandbox, SandboxLimits, scan_protections
 from .security import redact
 from .security_scan import blocking, scan_paths
@@ -140,6 +142,7 @@ class Context:
                     notes="Configured in [llamacpp]; the server serves one model.",
                 )
             )
+        register_remote_models(registry, self.config)
         return registry
 
     # ------------------------------------------------------------------ backend
@@ -150,7 +153,7 @@ class Context:
         return self._backend
 
     def is_single_model_backend(self) -> bool:
-        return isinstance(self.backend, LlamaCppBackend)
+        return bool(getattr(self.backend, "single_model", False))
 
     @property
     def installed(self) -> set[str]:
@@ -164,7 +167,7 @@ class Context:
             if isinstance(self.backend, DemoBackend):
                 self._installed = set()
                 self._ollama_note = "demo mode: showing the registry only"
-            elif isinstance(self.backend, LlamaCppBackend):
+            elif getattr(self.backend, "single_model", False):
                 # A llama.cpp server serves exactly one model; the configured
                 # name is a label, not something we need to probe for routing.
                 self._installed = {self.config.llamacpp.model}
@@ -184,7 +187,7 @@ class Context:
         if isinstance(self.backend, DemoBackend):
             self._installed = set()
             self._ollama_note = "demo mode: showing the registry only"
-        elif isinstance(self.backend, LlamaCppBackend):
+        elif getattr(self.backend, "single_model", False):
             self._installed = {self.config.llamacpp.model}
         else:
             try:
@@ -299,7 +302,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             checks.append((backend_label, "fail", str(exc)))
         if health is not None:
             if health.ok:
-                if isinstance(ctx.backend, LlamaCppBackend):
+                if ctx.is_single_model_backend():
                     installed = {config.llamacpp.model}
                 else:
                     installed = set(asyncio.run(ctx.backend.list_models()))
@@ -439,16 +442,18 @@ def cmd_models(args: argparse.Namespace) -> int:
             flags.append(paint("installed", _GREEN))
         if model.id in recommended_ids:
             flags.append(paint("recommended", _CYAN))
-        if not model.fits(hw):
+        if model.cloud:
+            flags.append(paint("cloud", _CYAN))
+        if not model.cloud and not model.fits(hw):
             flags.append(paint("too big", _RED))
-        elif not model.usable(hw, ctx.config.hardware.min_tokens_per_s):
+        elif not model.cloud and not model.usable(hw, ctx.config.hardware.min_tokens_per_s):
             flags.append(paint("slow", _YELLOW))
         rows.append(
             [
                 model.id,
-                f"{model.params_b:g}B",
-                human_gb(model.size_gb),
-                f"{model.estimated_tok_s(hw):.0f}",
+                "cloud" if model.cloud else f"{model.params_b:g}B",
+                "-" if model.cloud else human_gb(model.size_gb),
+                "-" if model.cloud else f"{model.estimated_tok_s(hw):.0f}",
                 f"{model.quality:.0f}",
                 ",".join(model.roles),
                 " ".join(flags) or "-",
@@ -717,6 +722,43 @@ def cmd_ask(args: argparse.Namespace) -> int:
         fail('Nothing to ask. Example: devmind ask "write a Python retry decorator"')
         return 2
     ctx = Context(args)
+    if getattr(args, "show_prompt", False):
+        try:
+            repo = ctx.default_repo()
+            if getattr(args, "repo", None):
+                report = CodeIndexer(ctx.store, ctx.config.index).index(
+                    Path(args.repo).expanduser().resolve()
+                )
+                repo = report.repo
+            profile = classify(prompt)
+            context = ctx.retriever.context_for(prompt, repo=repo)
+            style, packs = ctx.style_for(repo)
+            messages = build_messages(
+                prompt,
+                profile=profile,
+                context=context,
+                config=ctx.config.models,
+                extra_system=style,
+            )
+            print(
+                json.dumps(
+                    {
+                        "profile": {
+                            "task": profile.task.value,
+                            "language": profile.language,
+                            "difficulty": profile.difficulty,
+                        },
+                        "difficulty": classify_difficulty(prompt).to_dict(),
+                        "language_packs": packs,
+                        "characters": sum(len(message["content"]) for message in messages),
+                        "messages": messages,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        finally:
+            asyncio.run(ctx.aclose())
     repo = None
     if getattr(args, "repo", None):
         root = Path(args.repo).expanduser().resolve()
@@ -915,6 +957,58 @@ def cmd_config(args: argparse.Namespace) -> int:
             else "# no config file yet — run `devmind config --init`"
         )
     asyncio.run(ctx.aclose())
+    return 0
+
+
+def cmd_brief(args: argparse.Namespace) -> int:
+    """Set, show or clear the business/project context that shapes every answer."""
+    ctx = Context(args)
+    try:
+        if args.clear:
+            removed = ctx.store.forget_kind("business")
+            ok(f"cleared {removed} business note(s)")
+            return 0
+        if args.text:
+            text = " ".join(args.text).strip()
+            memory_id = ctx.store.remember(text, "business")
+            ok(f"saved business context ({memory_id[:10]}) - it is now part of every prompt")
+            return 0
+        rows = ctx.store.list_memories(kind="business", limit=20)
+        if not rows:
+            info("no business context yet. Example:")
+            print(
+                '  devmind brief "We sell hand-made furniture in Chennai; customers are SMB owners; '
+                'tone: warm, plain English; always mention delivery time."'
+            )
+            return 0
+        for row in rows:
+            print(f"- {row['text']}")
+        return 0
+    finally:
+        asyncio.run(ctx.aclose())
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    """Scaffold a real, runnable project: website, react, api or mobile."""
+    if args.kind not in starter_kinds():
+        fail("unknown starter. Choose one of: " + ", ".join(sorted(starter_kinds())))
+        return 2
+    try:
+        written = write_starter(args.kind, args.path, force=args.force)
+    except FileExistsError as exc:
+        fail(str(exc))
+        return 1
+    template = starter(args.kind)
+    ok(f"{args.kind}: wrote {len(written)} file(s) to {Path(args.path).expanduser()}")
+    print()
+    print(template.description)
+    print()
+    print(paint("next steps", _BOLD))
+    for step in template.next_steps:
+        print(f"  {step}")
+    print()
+    print(paint("verify", _DIM) + "  " + ", ".join(template.checks))
+    print(paint("then", _DIM) + "  devmind index " + str(Path(args.path).expanduser()))
     return 0
 
 
@@ -1557,6 +1651,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("prompt", nargs="+")
     ask.add_argument("-m", "--model", help="force a model id")
     ask.add_argument("--repo", metavar="PATH", help="index this repository and cite it")
+    ask.add_argument(
+        "--show-prompt",
+        dest="show_prompt",
+        action="store_true",
+        help="print the exact prompt that would be sent, then exit",
+    )
     ask.add_argument("--json", action="store_true")
     ask.set_defaults(func=cmd_ask)
 
@@ -1567,7 +1667,9 @@ def build_parser() -> argparse.ArgumentParser:
     teach = sub.add_parser("teach", help="remember a fact, preference or snippet", parents=[common])
     teach.add_argument("text", nargs="+")
     teach.add_argument(
-        "--kind", default="preference", choices=["preference", "fact", "snippet", "rule", "code"]
+        "--kind",
+        default="preference",
+        choices=["preference", "fact", "snippet", "rule", "code", "business"],
     )
     teach.set_defaults(func=cmd_teach)
 
@@ -1682,6 +1784,21 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--timeout", type=float, default=900)
     verify.add_argument("--json", action="store_true")
     verify.set_defaults(func=cmd_verify)
+
+    brief = sub.add_parser(
+        "brief", help="set/show the business context used in every answer", parents=[common]
+    )
+    brief.add_argument("text", nargs="*", help="business facts, tone, priorities")
+    brief.add_argument("--clear", action="store_true")
+    brief.set_defaults(func=cmd_brief)
+
+    new = sub.add_parser(
+        "new", help="scaffold a website, react app, api or mobile app", parents=[common]
+    )
+    new.add_argument("kind", choices=sorted(starter_kinds()))
+    new.add_argument("path")
+    new.add_argument("--force", action="store_true")
+    new.set_defaults(func=cmd_new)
 
     serve_parser = sub.add_parser(
         "serve", help="run the local web app (PC + phone, same Wi-Fi)", parents=[common]

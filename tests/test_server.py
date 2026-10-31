@@ -227,3 +227,20 @@ def test_clone_is_idempotent(tmp_path: Path) -> None:
     again = _request(app, "POST", "/api/clone", json={"url": str(source)}).json()
     assert again["already"] is True
     assert again["repo"] == "origin"
+
+
+def test_brief_endpoints_round_trip(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _request(app, "GET", "/api/brief").json()["notes"] == []
+
+    saved = _request(
+        app, "POST", "/api/brief", json={"text": "We sell furniture in Chennai."}
+    ).json()
+    assert saved["notes"] == ["We sell furniture in Chennai."]
+
+    fetched = _request(app, "GET", "/api/brief").json()
+    assert "BUSINESS CONTEXT" in fetched["block"]
+
+    cleared = _request(app, "POST", "/api/brief", json={"clear": True}).json()
+    assert cleared["removed"] == 1
+    assert _request(app, "GET", "/api/brief").json()["notes"] == []

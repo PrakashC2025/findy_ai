@@ -295,6 +295,44 @@
     }
   }
 
+  // ------------------------------------------------------------------ brief
+  async function loadBrief() {
+    try {
+      const response = await api("/api/brief");
+      const data = await response.json();
+      const notes = $("brief-notes");
+      notes.innerHTML = "";
+      for (const note of data.notes || []) {
+        const row = document.createElement("div");
+        row.textContent = "• " + note;
+        notes.appendChild(row);
+      }
+    } catch (error) {
+      $("brief-hint").textContent = String(error.message || error);
+    }
+  }
+
+  async function saveBrief(clear) {
+    const text = $("brief-text").value.trim();
+    if (!clear && !text) {
+      $("brief-hint").textContent = "write something first";
+      return;
+    }
+    try {
+      const response = await api("/api/brief", {
+        method: "POST",
+        body: JSON.stringify(clear ? { clear: true } : { text }),
+      });
+      const data = await response.json();
+      $("brief-hint").textContent = clear ? "cleared" : "saved";
+      if (!clear) $("brief-text").value = "";
+      await loadBrief();
+      void data;
+    } catch (error) {
+      $("brief-hint").textContent = String(error.message || error);
+    }
+  }
+
   // ---------------------------------------------------------------- analyze
   async function listFiles() {
     if (!state.repo) {
@@ -451,7 +489,11 @@
   }
 
   $("tab-ask").onclick = () => selectTab("ask");
-  $("tab-analyze").onclick = () => { selectTab("analyze"); if (state.repo) listFiles(); };
+  $("tab-analyze").onclick = () => {
+    selectTab("analyze");
+    loadBrief();
+    if (state.repo) listFiles();
+  };
   $("tab-fix").onclick = () => selectTab("fix");
 
   $("repo-select").onchange = (event) => {
@@ -468,6 +510,8 @@
   $("git-input").addEventListener("keydown", (event) => { if (event.key === "Enter") cloneRepo(); });
   $("path-input").addEventListener("keydown", (event) => { if (event.key === "Enter") openFolder(); });
   $("files-btn").onclick = listFiles;
+  $("brief-save").onclick = () => saveBrief(false);
+  $("brief-clear").onclick = () => saveBrief(true);
   $("checks-btn").onclick = runChecks;
   $("fix-btn").onclick = () => proposeFix(false);
   $("fix-apply-btn").onclick = () => {

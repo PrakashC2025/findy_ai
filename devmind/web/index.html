@@ -59,6 +59,20 @@ Pick a project above so answers can cite real files with <code>file:line</code>.
 
   <section class="panel" id="panel-analyze" role="tabpanel">
     <div class="card">
+      <h3>Business context</h3>
+      <p class="hint">What you do, who buys, tone and priorities. It is added to every answer on this
+        machine and never leaves it unless you enable a remote provider.</p>
+      <textarea id="brief-text" rows="3" placeholder="We sell hand-made furniture in Chennai; SMB owners; warm plain English; always mention delivery time."
+        style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="brief-save">Save</button>
+        <button class="ghost" id="brief-clear">Clear all</button>
+        <span class="hint" id="brief-hint"></span>
+      </div>
+      <div id="brief-notes" class="hint" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
       <h3>Project files</h3>
       <div class="row" style="margin-bottom:8px">
         <button class="ghost" id="files-btn">List indexed files</button>

@@ -392,6 +392,8 @@ class Router:
         )
 
     def _missing(self, spec: Model) -> bool:
+        if spec.cloud:
+            return False  # nothing to download: it runs at the provider
         return self.installed is not None and spec.id not in self.installed
 
     def _choose(self, profile: TaskProfile) -> RouteDecision:
@@ -433,6 +435,8 @@ class Router:
             return value
 
         def permissible(model: Model) -> bool:
+            if model.cloud:
+                return True  # runs on the provider, so local memory/speed do not apply
             cap = self.config.hardware.max_model_gb
             if cap and model.size_gb > cap:
                 return False
@@ -441,7 +445,7 @@ class Router:
             return model.usable(self.hardware, min_tok_s)
 
         installed = self.installed
-        local_pool = [m for m in pool if installed is None or m.id in installed]
+        local_pool = [m for m in pool if m.cloud or installed is None or m.id in installed]
         fit_pool = [m for m in local_pool if permissible(m) and m.quality >= min(required, 60)]
         if not fit_pool:
             fit_pool = [m for m in local_pool if permissible(m)]
@@ -451,7 +455,7 @@ class Router:
             fallback = [
                 m
                 for m in self.registry.all()
-                if m.id in installed and permissible(m) and "embed" not in m.roles
+                if (m.cloud or m.id in installed) and permissible(m) and "embed" not in m.roles
             ]
             if fallback:
                 fit_pool = fallback

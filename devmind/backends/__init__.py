@@ -11,6 +11,7 @@ Implementations
 ---------------
 * :class:`LlamaCppBackend` - a user-owned llama.cpp server (home PC / tunnel).
 * :class:`OllamaBackend`    - local Ollama, the easiest desktop option.
+* :class:`RemoteBackend`    - opt-in OpenAI-compatible free endpoint (consent required).
 * :class:`DemoBackend`      - deterministic placeholder for tests and `--demo`.
 
 The PWA runs an on-device model (WebLLM / wllama) and implements the same
@@ -24,6 +25,7 @@ from .base import Backend, BackendUnavailable, Health, Message
 from .demo import DemoBackend
 from .llamacpp import LlamaCppBackend
 from .ollama import OllamaBackend
+from .remote import RemoteBackend, register_remote_models
 
 __all__ = [
     "Backend",
@@ -33,7 +35,9 @@ __all__ = [
     "LlamaCppBackend",
     "Message",
     "OllamaBackend",
+    "RemoteBackend",
     "get_backend",
+    "register_remote_models",
 ]
 
 
@@ -55,6 +59,8 @@ def get_backend(config, *, demo: bool = False, transport=None) -> Backend:
             request_timeout=config.llamacpp.request_timeout_s,
             transport=transport,
         )
+    if kind == "remote":
+        return RemoteBackend.from_config(config, transport=transport)
     if kind == "ollama":
         return OllamaBackend(
             config.ollama.base_url,

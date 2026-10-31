@@ -10,6 +10,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ambient DEVMIND_* variables must never leak into a test run."""
+    monkeypatch.delenv("DEVMIND_HOME", raising=False)
+    monkeypatch.delenv("DEVMIND_REMOTE_KEY", raising=False)
+
+
 @pytest.fixture()
 def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "devmind-home"

@@ -10,7 +10,7 @@ No telemetry.
 
 ```
 $ devmind serve --open           # or double-click scripts/devmind.command / .bat
-DevMind 0.4.0 on http://127.0.0.1:8787
+DevMind 0.5.0 on http://127.0.0.1:8787
 
 $ devmind index .
 ✓ shop: 214 indexed, 0 unchanged, 0 removed, 3120 chunks, 2680 symbols in 8.3s - complete
@@ -130,7 +130,7 @@ verify it on a copy, apply only when it passes). On the phone, open the printed 
 |---|---|
 | `devmind doctor` | Hardware, backend health, registry, index, memory and privacy checks |
 | `devmind models` | Registry + what fits this machine, with download hints |
-| `devmind ask "…" [--repo PATH] [-m MODEL] [--json]` | Streamed, cited answer; `--repo` indexes + cites the project |
+| `devmind ask "…" [--repo PATH] [-m MODEL] [--json] [--show-prompt]` | Streamed, cited answer; `--show-prompt` prints the exact messages sent |
 | `devmind chat` | Interactive session (`/route`, `/memory`, `/teach`, `/exit`) |
 | `devmind index [PATH] [--force] [--json]` | Incremental, resumable code index |
 | `devmind search "…" [--repo R] [-k N]` | Code search with `file:line` |
@@ -145,12 +145,35 @@ verify it on a copy, apply only when it passes). On the phone, open the printed 
 | `devmind github login` | Device-flow login (or `--token` for a fine-grained PAT) |
 | `devmind github status\|repos\|clone` | Account, repositories, private clone |
 | `devmind github pr --repo … --branch … --title … --path CLONE` | Push a branch and open a PR (never to `main`) |
-| `devmind teach "we use pnpm, never npm"` | Store a durable preference/fact |
+| `devmind teach "we use pnpm, never npm" [--kind business]` | Store a durable preference/fact |
+| `devmind brief "we sell furniture in Chennai"` / `brief` / `brief --clear` | Business context that is added to every prompt |
+| `devmind new website\|react\|api\|mobile PATH [--force]` | Working starter project (no empty folders) |
 | `devmind memory [--search Q]` / `forget --all` | Inspect / delete what is stored |
 | `devmind pull MODEL` | Ollama model download |
 | `devmind config [--init\|--path]`, `devmind stats` | Settings, decisions, statistics |
 
 `--home DIR` and `--demo` work before or after the subcommand.
+
+## Free online models (opt-in)
+
+DevMind runs local by default and ships **no provider keys**. If your PC cannot hold a strong model,
+you can point it at a free tier you signed up for — Groq, OpenRouter `:free`, Google AI Studio's
+OpenAI-compatible endpoint, or LM Studio on another machine. It needs `[remote] enabled = true`,
+`consent = true` and your key in `DEVMIND_REMOTE_KEY`; `offline = true` and missing consent disable it
+entirely. Read [docs/remote.md](docs/remote.md) for the config, what leaves the machine, and why
+"one model" means routing + scoring rather than a merged model.
+
+```toml
+[backend]
+kind = "remote"
+
+[remote]
+enabled = true
+consent = true
+provider = "Groq free tier"
+base_url = "https://api.groq.com/openai/v1"
+models = ["llama-3.3-70b-versatile"]
+```
 
 ## Code index and memory
 
@@ -220,15 +243,16 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 | Step | Deliverable | State |
 |---|---|---|
 | 1 | Config, hardware detection, registry, router, Ollama, CLI, memory | **Done** |
-| 2 | Backend interface + llama.cpp, portable SQLite schema, indexer, cited retrieval, GitHub, verification | **Done, 130 tests** |
+| 2 | Backend interface + llama.cpp, portable SQLite schema, indexer, cited retrieval, GitHub, verification | **Done** |
 | 3 | Sandbox (limits, scrubbed env, optional netns), security scan, self-repair loop, confidence, language packs | **Done** |
 | 4 | Semantic cache, two-tier answer, plan-then-solve, 2-3 samples scored by checks, judge for ties | **Done for the web app + CLI cache; measure next** |
-| 8 | Local web UI + PWA (installable, phone-friendly), phone ↔ PC | **Partially done**: web app + PWA shell; on-device WebLLM and the OpenAI-compatible endpoint are not |
+| 8 | Local web UI + PWA (installable, phone-friendly), phone ↔ PC | **Partially done**: web app + PWA shell, opt-in OpenAI-compatible *client*; on-device WebLLM and an endpoint for editors are not |
 | 5 | Web knowledge layer (cache, version detection, injection defence) | Not started |
 | 6 | Feedback capture + LoRA with auto-rollback | Feedback storage done; training not started |
 | 7 | Google Drive backend with encryption | Not started |
 | 9 | Evaluation suite (100+ tasks, regression gate) | Not started |
 | 10 | Docs | Started (`docs/`) |
+| 11 | Business brief, prompt inspector, project starters, opt-in remote provider | **Done, 239 tests**; prompt *optimizer* is the inspector today |
 
 ### Honest deviations
 
@@ -248,13 +272,20 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
   design; it does not replace a real SAST tool. High-severity findings block an automatic patch.
 * **The ensemble is same-model sampling on a llama.cpp server.** A llama.cpp server serves one GGUF,
   so "3 candidates" means three samples at different temperatures, not three different models. With
-  Ollama, distinct fast/strong/judge models are used when they are installed.
+  Ollama, distinct fast/strong/judge models are used when they are installed. With `[remote]` enabled,
+  the configured cloud model is registered for the strong/judge roles.
 * **The CLI streams one answer.** The cache is used by `devmind ask`; plan/sampling/judge run behind
   the web app (and are tested directly). Wiring `--deep` into the CLI is next.
 * **The PWA has no on-device model.** It caches its shell offline, but answers come from the PC.
   WebLLM/wllama in a worker is still step 8.
 * **No web grounding yet** (step 5), so "current" library behaviour is answered from the model and
   the project only — and the prompt says so.
+* **No provider keys, no scraping, no merged model.** `[remote]` is a consent-gated client for an
+  endpoint you own the key for. DevMind cannot sign you into a free site or combine providers into
+  one set of weights; it routes between them and scores their answers.
+* **The prompt inspector shows, it does not rewrite.** `ask --show-prompt` prints the exact system
+  and user messages (profile, packs, sizes); an automatic "rewrite my prompt better" step is not
+  implemented, and the UI has no button for it yet.
 * **No system control.** DevMind runs the checks a project defines and writes a verified diff when you
   pass `--apply`. Arbitrary shell execution needs the approval-gated design in
   [docs/permissions.md](docs/permissions.md); it is not implemented.

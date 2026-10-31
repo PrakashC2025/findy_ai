@@ -77,3 +77,17 @@ is — not before.
   statistics locally; `devmind github logout` deletes the encrypted token file.
 
 See [privacy.md](privacy.md) for the file list and encryption status per item.
+
+## Third-party model providers
+
+Sending code to a cloud model is its own permission, separate from filesystem access:
+
+* `[remote] enabled = true` turns the feature on.
+* `[remote] consent = true` records that you know prompts and code leave this machine.
+* Your key lives in the environment variable named by `[remote] api_key_env`; it is never written to
+  `config.toml`, never logged, and never sent to the browser.
+* `offline = true` overrides all of the above.
+* `devmind forget --all` also deletes the business brief that would otherwise be sent.
+
+DevMind will not sign into a provider site, scrape it, or use credentials you did not put in your own
+environment. See [remote.md](remote.md).

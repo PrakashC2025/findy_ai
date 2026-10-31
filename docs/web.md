@@ -46,7 +46,7 @@ devmind serve --host 0.0.0.0 --port 8787
 The terminal prints two URLs:
 
 ```
-DevMind 0.4.0 on http://127.0.0.1:8787
+DevMind 0.5.0 on http://127.0.0.1:8787
 Open: http://127.0.0.1:8787/?token=6Qk...
 Phone (same Wi-Fi): http://192.168.1.24:8787/?token=6Qk...
 ```
@@ -73,7 +73,7 @@ Then open `http://<pc-name>:8787/?token=…` from the phone. No port forwarding,
 | Tab | Actions |
 |---|---|
 | **Ask** | Streamed answer with difficulty, model, language packs, `file:line` citations, confidence and timings. Hard questions are sampled and upgraded; a near-identical question is answered from the local semantic cache. |
-| **Analyze** | Indexed file list + file preview; **Run checks** executes the project's own tests/lint under CPU/memory/time limits and shows the security scan. |
+| **Analyze** | Indexed file list + file preview; **Run checks** executes the project's own tests/lint under CPU/memory/time limits and shows the security scan; **Business context** saves the brief that is prepended to every answer. |
 | **Fix** | Describe a problem → the model proposes a unified diff, which is applied to a *copy*, security-scanned and checked. "Propose and apply" writes it only when verified, then re-runs the checks on your tree. |
 
 **Open folder** indexes a directory on the machine running the server: type an absolute path, or pass
@@ -97,6 +97,8 @@ All endpoints except `/`, `/static/*` and `/healthz` require the token (`X-DevMi
 | GET | `/api/repos` | indexed projects |
 | POST | `/api/index` | `{"path": "...", "repo": "..."}` → index a folder |
 | POST | `/api/clone` | `{"url": "...", "name": "..."}` → clone into `$DEVMIND_HOME/repos` and index |
+| GET | `/api/brief` | business notes + the exact block that is injected into prompts |
+| POST | `/api/brief` | `{"text": "..."}` to add a note, `{"clear": true}` to erase them all |
 | GET | `/api/files?repo=` | indexed paths |
 | GET | `/api/file?repo=&path=` | file text (traversal-guarded, 200 KB cap) |
 | POST | `/api/ask` | server-sent events: `meta`, `token`, `replace`, `done`, `error` |
@@ -117,3 +119,6 @@ still writing, and a later `replace` event upgrades the answer if the pipeline f
 * **`0.0.0.0` is plain HTTP.** The token protects the API, not the wire. Use a tunnel for anything
   beyond your own network.
 * **No accounts, no sync, no telemetry.** The server keeps everything in `$DEVMIND_HOME`.
+* **A remote provider is opt-in and server-side.** `/api/status` reports `cloud: true` only when a
+  configured remote endpoint is usable; the browser never sees the key. See
+  [remote.md](remote.md).

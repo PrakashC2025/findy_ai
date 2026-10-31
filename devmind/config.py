@@ -64,6 +64,26 @@ class OllamaConfig:
 
 
 @dataclass
+class RemoteConfig:
+    """Opt-in OpenAI-compatible provider (user's own free tier).
+
+    Off by default. Requires ``enabled`` + ``consent`` + an API key in the
+    environment; the key is never written to the config file.
+    """
+
+    enabled: bool = False
+    consent: bool = False
+    provider: str = ""  # label only, e.g. "Groq free tier"
+    base_url: str = ""  # e.g. https://api.groq.com/openai/v1
+    api_key_env: str = "DEVMIND_REMOTE_KEY"
+    models: list[str] = field(default_factory=list)
+    model_quality: float = 85.0
+    context: int = 32768
+    connect_timeout_s: float = 10.0
+    request_timeout_s: float = 180.0
+
+
+@dataclass
 class ModelConfig:
     """Decoding defaults.  Low temperature by default: correctness over flair."""
 
@@ -188,6 +208,7 @@ class Config:
     backend: BackendConfig = field(default_factory=BackendConfig)
     llamacpp: LlamaCppConfig = field(default_factory=LlamaCppConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    remote: RemoteConfig = field(default_factory=RemoteConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     router: RouterConfig = field(default_factory=RouterConfig)

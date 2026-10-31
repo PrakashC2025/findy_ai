@@ -80,6 +80,18 @@ class Retriever:
         self.config = config
 
     # ------------------------------------------------------------------ public
+    def business_block(self, limit: int = 3) -> str:
+        """The user's business/project brief, always included when present."""
+        rows = self.store.list_memories(kind="business", limit=limit)
+        if not rows:
+            return ""
+        lines = [
+            "BUSINESS CONTEXT (written by the user; use it to pick trade-offs, "
+            "tone and priorities):"
+        ]
+        lines += [f"- {str(row.get('text', '')).strip()}" for row in rows if row.get("text")]
+        return "\n".join(lines)
+
     def context_for(
         self,
         prompt: str,
@@ -126,6 +138,10 @@ class Retriever:
                 "(cite as [M1], [M2] ... when you rely on it):\n" + "\n".join(lines)
             )
         preferences = [hit.text for hit in ordered if hit.kind in {"preference", "rule"}][:6]
+
+        business = self.business_block()
+        if business:
+            block = f"{business}\n\n{block}" if block else business
 
         code_block, code_hits, code_citations = self._code_context(prompt, repo)
         if code_block:

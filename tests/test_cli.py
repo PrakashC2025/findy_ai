@@ -272,3 +272,45 @@ def test_ask_injects_language_pack_guidance(tmp_home: Path, tmp_path: Path, caps
     payload = json.loads(capsys.readouterr().out)
     assert payload["language_packs"] == ["python"]
     assert payload["memory"]["code_hits"]
+
+
+def test_brief_is_stored_shown_and_cleared(tmp_home: Path, capsys) -> None:
+    assert run(tmp_home, "brief", "We sell furniture in Chennai; warm, plain English.") == 0
+    capsys.readouterr()
+
+    assert run(tmp_home, "brief") == 0
+    assert "furniture" in capsys.readouterr().out
+
+    store = MemoryStore(tmp_home / "memory.db")
+    notes = [row["text"] for row in store.list_memories(kind="business")]
+    assert notes and notes[0].startswith("We sell")
+    store.close()
+
+    assert run(tmp_home, "brief", "--clear") == 0
+    capsys.readouterr()
+    assert run(tmp_home, "brief") == 0
+    captured = capsys.readouterr()
+    assert "no business context yet" in captured.out + captured.err
+
+
+def test_business_block_is_always_in_the_prompt(tmp_home: Path, capsys) -> None:
+    assert run(tmp_home, "brief", "B2B; always mention delivery time.") == 0
+    capsys.readouterr()
+    assert run(tmp_home, "ask", "--json", "--show-prompt", "add a refund button") == 0
+    payload = json.loads(capsys.readouterr().out)
+    system = payload["messages"][0]["content"]
+    assert "BUSINESS CONTEXT" in system
+    assert "delivery time" in system
+    assert payload["characters"] > 0
+
+
+def test_new_scaffolds_a_project(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    target = tmp_path / "landing"
+    assert run(tmp_home, "new", "website", str(target)) == 0
+    out = capsys.readouterr().out
+    assert (target / "index.html").exists()
+    assert "next steps" in out
+    assert "python3 -m http.server" in out
+
+    assert run(tmp_home, "new", "website", str(target)) == 1
+    assert "not empty" in capsys.readouterr().err

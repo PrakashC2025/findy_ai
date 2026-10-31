@@ -33,6 +33,7 @@ class Model:
     training_ok: bool = False
     strengths: tuple[str, ...] = ()
     notes: str = ""
+    cloud: bool = False
 
     # ------------------------------------------------------------------ checks
     def fits(self, hw: Hardware) -> bool:

@@ -39,7 +39,7 @@ from .embed import DIM, cosine, embed, from_bytes, to_bytes, tokenize
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "storage" / "schema.sql"
 
-MEMORY_KINDS = ("preference", "fact", "snippet", "rule", "code")
+MEMORY_KINDS = ("preference", "fact", "snippet", "rule", "code", "business")
 SCHEMA_VERSION = 1
 
 
@@ -238,6 +238,14 @@ class MemoryStore:
             self._connection().execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
         )
         return self._row_to_memory(row) if row else None
+
+    def forget_kind(self, kind: str) -> int:
+        """Delete every memory of one kind (e.g. the business brief)."""
+        connection = self._connection()
+        with self._lock:
+            removed = connection.execute("DELETE FROM memories WHERE kind=?", (kind,)).rowcount
+            connection.commit()
+        return int(removed or 0)
 
     def list_memories(
         self, *, limit: int = 100, offset: int = 0, kind: str | None = None

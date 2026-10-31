@@ -31,6 +31,8 @@ from .base import BackendUnavailable, Health, LoopClient, Message
 
 class LlamaCppBackend:
     name = "llamacpp"
+    label = "llama.cpp server"
+    single_model = True  # a llama.cpp server serves exactly one GGUF
 
     def __init__(
         self,
@@ -148,8 +150,8 @@ class LlamaCppBackend:
             raise BackendUnavailable(self.explain(exc)) from exc
         except httpx.ReadTimeout as exc:
             raise BackendUnavailable(
-                f"llama.cpp did not answer within {self._http.request_timeout}s. "
-                "Lower -c (context) or use a smaller quantisation."
+                f"{self.label} did not answer within {self._http.request_timeout}s. "
+                "Try a shorter prompt, a smaller model, or a lower -c (context)."
             ) from exc
         except httpx.HTTPError as exc:
             raise BackendUnavailable(self.explain(exc)) from exc

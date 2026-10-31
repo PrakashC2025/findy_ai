@@ -32,6 +32,9 @@ There is no account, no sync, no analytics endpoint, no crash reporter, no updat
 * `llamacpp` → your own llama.cpp server, loopback or your private tunnel (Tailscale/WireGuard).
 * `ollama` → `http://127.0.0.1:11434` on your own machine; `devmind pull` downloads from Ollama's
   registry (that download is Ollama's traffic, not yours).
+* `remote` → **only** if you set `[remote] enabled = true`, `consent = true` and provide your own key
+  in `DEVMIND_REMOTE_KEY`. Then prompts, the business brief and retrieved code go to that provider
+  when a cloud model is routed. `offline = true` disables it completely. See [remote.md](remote.md).
 
 Two other network paths exist, both only when you ask for them:
 
@@ -44,7 +47,9 @@ Future steps keep this property:
   and every fetched page is shown as a source URL.
 * Step 7 (Google Drive) uploads only encrypted memory snapshots, to an app-data folder you pick,
   using your own OAuth credentials.
-* There is no paid API code path at all, so there is no "just this once" cloud call to audit.
+* There is no paid provider SDK and no bundled key. The single third-party inference path is
+  `[remote]`, off unless you enable it, consent to it and export your own key — so there is no
+  "just this once" cloud call to audit.
 
 ## Sandboxed execution
 

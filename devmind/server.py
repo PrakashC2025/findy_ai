@@ -30,7 +30,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .backends import BackendUnavailable, DemoBackend, LlamaCppBackend, get_backend
+from .backends import (
+    BackendUnavailable,
+    DemoBackend,
+    get_backend,
+    register_remote_models,
+)
 from .confidence import assess
 from .config import Config
 from .difficulty import classify_difficulty
@@ -86,6 +91,11 @@ class CheckRequest(BaseModel):
     run: bool = True
 
 
+class BriefRequest(BaseModel):
+    text: str = Field(default="", max_length=4000)
+    clear: bool = False
+
+
 class CloneRequest(BaseModel):
     url: str = Field(min_length=1, max_length=500)
     name: str = ""
@@ -109,6 +119,7 @@ class Runtime:
         self.store = MemoryStore(self.config.db_path, redact=self.config.privacy.redact_secrets)
         self.retriever = Retriever(self.store, self.config.memory)
         self.registry = Registry.load(self.config.registry_override_path)
+        register_remote_models(self.registry, self.config)
         self.hardware = Hardware.detect(
             reserve_gb=self.config.hardware.reserve_gb, home=self.config.home
         )
@@ -122,7 +133,7 @@ class Runtime:
         if self._installed is None:
             if isinstance(self.backend, DemoBackend):
                 self._installed = set()
-            elif isinstance(self.backend, LlamaCppBackend):
+            elif getattr(self.backend, "single_model", False):
                 self._installed = {self.config.llamacpp.model}
             else:
                 try:
@@ -164,7 +175,7 @@ class Runtime:
         """(quick, strong, judge) - never invents a model that is not loaded."""
         if isinstance(self.backend, DemoBackend):
             return "demo", None, None
-        if isinstance(self.backend, LlamaCppBackend):
+        if getattr(self.backend, "single_model", False):
             model = self.config.llamacpp.model
             return model, model, model
         installed = await self.installed()
@@ -204,11 +215,12 @@ class Runtime:
             "version": __version__,
             "demo": self.demo,
             "backend": self.config.backend.kind,
+            "cloud": self.config.backend.kind == "remote" and self.config.remote.enabled,
             "model": "demo"
             if self.demo
             else (
                 self.config.llamacpp.model
-                if isinstance(self.backend, LlamaCppBackend)
+                if getattr(self.backend, "single_model", False)
                 else self.config.models.default
             ),
             "hardware": {
@@ -342,6 +354,26 @@ def create_app(
             "complete": report.complete,
             "summary": report.summary(),
         }
+
+    @app.get("/api/brief")
+    async def api_brief() -> dict[str, Any]:
+        rows = runtime.store.list_memories(kind="business", limit=20)
+        return {
+            "notes": [row["text"] for row in rows],
+            "block": runtime.retriever.business_block(),
+        }
+
+    @app.post("/api/brief")
+    async def api_brief_save(request: BriefRequest) -> dict[str, Any]:
+        if request.clear:
+            removed = runtime.store.forget_kind("business")
+            return {"removed": removed, "notes": []}
+        text = request.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+        runtime.store.remember(text, "business")
+        rows = runtime.store.list_memories(kind="business", limit=20)
+        return {"removed": 0, "notes": [row["text"] for row in rows]}
 
     @app.post("/api/clone")
     async def api_clone(request: CloneRequest) -> dict[str, Any]:

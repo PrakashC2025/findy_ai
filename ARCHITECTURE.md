@@ -197,6 +197,9 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 | Security scan is heuristics | Fast, explainable, no extra dependency | False positives; suppression comments needed |
 | Checks are the project's own | No invented test commands | No checks means no verification, and it says so |
 | No silent network calls | Privacy by construction | Web grounding (step 5) must be explicit and cached |
+| Remote provider is opt-in, key in env | No bundled keys, no scraping, auditable egress | Cloud models need consent and a user-owned key |
+| Business brief is a memory kind | One storage path, redacted and deletable like the rest | Always sent with prompts, so it must stay short |
+| Starters are real projects | A scaffold that already runs beats an empty folder | Four maintained templates, not every stack |
 
 ## 9. Roadmap
 
@@ -213,8 +216,12 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 * **Step 7 - Drive + encryption.** OAuth, app-data folder, encrypted snapshots, passphrase-derived
   keys for memory (not only the GitHub token).
 * **Step 8 - PWA + API.** Partially shipped: FastAPI on loopback, SSE, installable PWA, token auth,
-  phone-friendly UI. Still missing: WebLLM/wllama in a worker, OpenAI-compatible endpoint for editors,
-  VS Code extension.
+  phone-friendly UI, opt-in OpenAI-compatible *client* (`[remote]`). Still missing: WebLLM/wllama in a
+  worker, an OpenAI-compatible endpoint for editors, VS Code extension.
+* **Step 11 - business context, prompt inspector, starters.** Shipped: `devmind brief`,
+  `ask --show-prompt`, `/api/brief`, `devmind new {website,react,api,mobile}`, and the consent-gated
+  `remote` backend with cloud models in the registry. Still missing: an automatic prompt optimiser,
+  and web tools/grounding.
 * **Step 9 - evaluation.** 100+ tasks (HumanEval/MBPP-style + repo tasks), pass rate,
   hallucinated-symbol rate, latency, RSS; CI regression gate.
 * **Step 10 - docs** grow with each step.
