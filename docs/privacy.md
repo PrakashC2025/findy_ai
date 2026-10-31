@@ -46,6 +46,19 @@ Future steps keep this property:
   using your own OAuth credentials.
 * There is no paid API code path at all, so there is no "just this once" cloud call to audit.
 
+## Sandboxed execution
+
+`devmind check` and `devmind fix` run project commands with an environment allow-list: only `PATH`,
+`LANG`, `TZ`, `VIRTUAL_ENV` and similar variables reach the child. Every token/key variable is
+dropped, `HOME` and `TMPDIR` point at a fresh temporary directory that is deleted afterwards, and
+stdout/stderr come back through pipes. Process limits (CPU, memory, file size, process count, core
+dumps) are applied with `rlimit`s. Network isolation uses an empty network namespace **only where
+`unshare -n` is available**; the CLI prints whether it is, every run.
+
+`devmind fix` copies the project first, skipping `.git`, `node_modules`, virtualenvs, `.env*` files and
+files above 2 MB. `devmind check` runs in your tree (so dependency folders keep working) under the
+same limits — it is an accident guard, not a container.
+
 ## Secrets
 
 Before anything is written to memory or to an episode, DevMind redacts:
@@ -78,7 +91,7 @@ is itself private information.
 |---|---|
 | GitHub token | **Encrypted** — scrypt (n=2^14) → Fernet, file mode `0600` |
 | Memory, index, routing log | **Not encrypted yet** — protected by OS file permissions |
-| Backups / Drive snapshots | Not implemented |
+| Backups / Drive snapshots | Not implemented (step 7: opt-in, encrypted before upload) |
 
 Field-level encryption for memory with a passphrase, and encrypted Drive snapshots, is step 7. It
 will ship with a migration path (`encrypted` marker in the DB, `devmind encrypt`/`decrypt`, scrypt →

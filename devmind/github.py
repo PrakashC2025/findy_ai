@@ -63,6 +63,9 @@ def _fernet(passphrase: str, salt: bytes):
     return Fernet(base64.urlsafe_b64encode(key))
 
 
+_CREDENTIAL_HEADER = b"DMC1"
+
+
 class CredentialStore:
     """Encrypted-at-rest token storage (scrypt -> Fernet, file mode 0600)."""
 
@@ -93,7 +96,9 @@ class CredentialStore:
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "wb") as handle:
-            handle.write(salt + b"\n" + blob)
+            # Fixed-width header: the salt is random bytes and may contain 0x0A,
+            # so it can never be separated with a newline.
+            handle.write(_CREDENTIAL_HEADER + salt + blob)
         tmp.replace(self.path)
         with contextlib.suppress(OSError):
             os.chmod(self.path, 0o600)
@@ -104,7 +109,10 @@ class CredentialStore:
         from cryptography.fernet import InvalidToken
 
         raw = self.path.read_bytes()
-        salt, _, blob = raw.partition(b"\n")
+        if raw.startswith(_CREDENTIAL_HEADER):
+            salt, blob = raw[len(_CREDENTIAL_HEADER) :][:16], raw[len(_CREDENTIAL_HEADER) + 16 :]
+        else:  # legacy files written before the header existed
+            salt, _, blob = raw.partition(b"\n")
         cipher = _fernet(passphrase, salt)
         try:
             payload = json.loads(cipher.decrypt(blob))

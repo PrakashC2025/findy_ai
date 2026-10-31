@@ -10,9 +10,10 @@ Two paths, both free:
   the workflow on your branch and read the result back. Actions minutes for
   public repos are free; private repos use your account's included minutes.
 
-Limits are stated plainly: local checks are not a security sandbox (step 3 adds
-process isolation), and a green test suite does not prove the code is correct -
-only that the checks the project defines passed.
+Process isolation lives in :mod:`devmind.sandbox` and is opt-in per call, so the
+plain ``devmind verify`` path stays as fast as the test suite itself.  A green
+run does not prove the code is correct - only that the checks the project
+defines passed.
 """
 
 from __future__ import annotations
@@ -186,7 +187,20 @@ def _clean_env() -> dict[str, str]:
     return env
 
 
-def run_check(spec: CheckSpec, root: str | Path, *, timeout: float = 600.0) -> CheckResult:
+def run_check(
+    spec: CheckSpec,
+    root: str | Path,
+    *,
+    timeout: float = 600.0,
+    sandbox: Any = None,
+) -> CheckResult:
+    """Run one check.  Pass a :class:`devmind.sandbox.Sandbox` to enforce limits.
+
+    The sandbox is duck-typed to avoid a circular import: it exposes
+    ``run_check(spec, root, timeout=...)`` and returns ``CheckResult``.
+    """
+    if sandbox is not None:
+        return sandbox.run_check(spec, root, timeout=timeout)
     started = time.perf_counter()
     try:
         completed = subprocess.run(
@@ -232,6 +246,7 @@ def run_local_checks(
     *,
     timeout: float = 600.0,
     checks: list[CheckSpec] | None = None,
+    sandbox: Any = None,
 ) -> list[CheckResult]:
     root = Path(root)
     specs = detect_checks(root) if checks is None else checks
@@ -246,7 +261,7 @@ def run_local_checks(
                 ),
             )
         ]
-    return [run_check(spec, root, timeout=timeout) for spec in specs]
+    return [run_check(spec, root, timeout=timeout, sandbox=sandbox) for spec in specs]
 
 
 def summarise(results: list[CheckResult]) -> str:

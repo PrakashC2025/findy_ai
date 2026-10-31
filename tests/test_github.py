@@ -40,6 +40,14 @@ def test_token_is_encrypted_and_roundtrips(tmp_path: Path) -> None:
     assert not store.exists()
 
 
+def test_salt_containing_a_newline_still_roundtrips(tmp_path: Path, monkeypatch) -> None:
+    """Regression: the salt is raw random bytes, so it may contain 0x0A."""
+    monkeypatch.setattr("devmind.github.os.urandom", lambda _n: b"\n" * 16)
+    store = CredentialStore(tmp_path / "credentials.enc")
+    store.save("token-value", "correct horse battery")
+    assert store.load("correct horse battery")["token"] == "token-value"
+
+
 def test_short_passphrase_is_rejected(tmp_path: Path) -> None:
     store = CredentialStore(tmp_path / "credentials.enc")
     with pytest.raises(GitHubError):
@@ -206,6 +214,7 @@ def test_workspace_branches_commits_and_pushes(tmp_path: Path, bare_remote: Path
 
 
 def test_workspace_scrubs_the_token_from_errors(tmp_path: Path, bare_remote: Path) -> None:
+    # devmind: allow secret.generic
     workspace = GitWorkspace(tmp_path, token="ghp_supersecret")
     assert workspace._scrub("fatal: ghp_supersecret rejected") == (
         "fatal: [REDACTED:github_token] rejected"

@@ -14,6 +14,10 @@ The database is a single file under ``$DEVMIND_HOME``. Nothing is sent
 anywhere. ``devmind forget`` and ``devmind wipe`` are implemented here.
 """
 
+# Dynamic SQL below interpolates only fixed identifiers (table names, WHERE fragments),
+# never user values; every value is a bound parameter.
+# devmind: allow-file sql.dynamic
+
 from __future__ import annotations
 
 import contextlib

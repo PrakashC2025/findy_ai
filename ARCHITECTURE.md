@@ -32,7 +32,16 @@ general chat assistant.
       ┌──────────▼┐  ┌──▼────────┐ ┌─▼──────────┐ │      ┌────▼─────┐
       │registry.py│  │hardware.py│ │ retriever  │ │      │ verify.py│
       │models.toml│  │budgets    │ │ memory+code│ │      │ local+CI │
-      └───────────┘  └───────────┘ └─────┬──────┘ │      └──────────┘
+      └───────────┘  └───────────┘ └─────┬──────┘ │      └────┬─────┘
+                                          │        │           │
+                        ┌─────────────────┴────────┴───────────┴────┐
+                        │  quality gates: sandbox.py (rlimits,      │
+                        │  scrubbed env, optional netns) →          │
+                        │  security_scan.py → repair.py             │
+                        │  (diff apply on a copy, ≤3 rounds) →      │
+                        │  confidence.py · difficulty.py ·          │
+                        │  languages.py (packs, commands, docs)     │
+                        └─────────────────┬─────────────────────────┘
                                           │        │
                               ┌───────────▼────────▼───────┐
                               │ memory/store.py            │
@@ -61,7 +70,21 @@ general chat assistant.
 5. Retrieve relevance-gated memory and cited code chunks (`[M1]`, `[C1] path:lines`).
 6. Build the prompt: hard rules, task guidance, output format, memory, code.
 7. Stream tokens, measuring first-token and total time.
-8. Record the episode and routing decision; run verification separately (`devmind verify`).
+8. Record the episode and routing decision.
+9. Score the answer with `confidence.assess()` from the citations and any executed checks, and show
+   the reasons (never a model self-report).
+
+## 3b. Repair lifecycle (`devmind fix "…"`)
+
+1. Detect the project's checks; if there are none, stop and say so.
+2. Retrieve cited code/memory context for the prompt.
+3. Ask the model for **one unified diff** (or `CANNOT FIX: reason`).
+4. `extract_diff` → `apply_diff` on a throwaway copy (`.git`, deps, `.env*` and large files excluded).
+5. `security_scan.scan_diff` on added lines; high-severity findings reject the round before execution.
+6. Run the checks on the copy under `rlimits`; on failure, send the real output back and repeat
+   (max 3, hard-capped at 5).
+7. Report `ok`, the winning diff, per-round evidence and confidence. `--apply` writes the diff and
+   re-runs the checks on the real tree; a failing re-run is reported, never hidden.
 
 ## 4. Contracts
 
@@ -130,7 +153,12 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 * Git auth via environment config, not argv/URL; error output scrubbed.
 * `ensure_safe_branch()` blocks the default branch for every push; PR head==base is rejected.
 * Verification: local project test command with timeout + scrubbed env, or Actions dispatch + poll
-  with failed-step names. **No sandbox yet** (step 3).
+  with failed-step names.
+* Sandboxing (`sandbox.py`): `RLIMIT_CPU/AS/DATA/FSIZE/NPROC/CORE`, a process group killed on
+  timeout, environment allow-list, fresh `HOME`/`TMPDIR`, and `unshare -n` when the kernel permits.
+  Reported as capabilities, never assumed.
+* Self-repair (`repair.py`): unified diffs only, applied to copies, security-gated, verified by the
+  project's own checks, at most N rounds, honest failure text afterwards.
 
 ## 8. Key decisions and trade-offs
 
@@ -142,15 +170,20 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 | Portable SQLite schema | Same DB on phone and PC | Sacrifices FTS5 guarantees and SQLite conveniences |
 | Feature-hashing embeddings | Zero downloads, microseconds | Lexical-ish recall; real embeddings planned |
 | One model per llama.cpp server | No fake routing to models that are not loaded | Quality is whatever you started |
-| Local tests without sandbox | Works today with zero setup | Not safe for untrusted repos; step 3 fixes |
+| rlimits sandbox, not a container | Works on macOS/Linux/Windows with no daemon; zero setup | No seccomp/user-namespace isolation; network isolation only where `unshare` works |
+| Diffs, not whole files, for repair | Small prompts, reviewable patches, `git apply` gives a hard failure | Weak models struggle to emit correct unified diffs |
+| Evidence-based confidence | Auditable, reproducible, no model self-report | Coarse: cannot tell a meaningful test from a trivial one |
+| Security scan is heuristics | Fast, explainable, no extra dependency | False positives; suppression comments needed |
+| Checks are the project's own | No invented test commands | No checks means no verification, and it says so |
 | No silent network calls | Privacy by construction | Web grounding (step 5) must be explicit and cached |
 
 ## 9. Roadmap
 
-* **Step 3 - verification pipeline.** `sandbox.py` (container or restricted subprocess, CPU/mem/time
-  limits, network off), self-repair loop capped at N rounds, confidence scoring.
-* **Step 4 - ensemble/judge.** 2-3 candidates on hard tasks, scored by step-3 checks + agreement;
-  judge picks, never concatenates.
+* **Step 3 - done.** `sandbox.py`, `security_scan.py`, `repair.py`, `confidence.py`, `difficulty.py`,
+  `languages.py`; `devmind check|fix|scan|languages`.
+* **Step 4 - in progress.** Difficulty classification is live (it gates repair/verify budgets); the
+  ensemble (2-3 candidates on hard tasks, scored by checks, judge only for ties, never concatenation),
+  two-tier quick-then-strong answering and the reasoning pipeline are next.
 * **Step 5 - web knowledge.** Cached official docs, version detection from manifests, provenance,
   prompt-injection defences.
 * **Step 6 - feedback + LoRA.** Accept/edit/reject capture, dataset export, QLoRA when idle,
@@ -165,9 +198,13 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 
 ## 10. Testing strategy
 
-* 130 tests in ~3.8 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
+* 189 tests in ~5 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
   incremental/resumable indexing, retrieval gating, prompts, redaction, backends (MockTransport),
   GitHub flows (local bare repo + mocked API), verification (local + fake Actions), CLI paths.
+* Step-3 tests are behavioural, not mock-heavy: the sandbox is checked by actually hitting a timeout,
+  a memory cap and an env scrub; repair is checked by applying real diffs to real failing projects
+  (including a security-blocked patch and a two-round recovery); the scanner is checked against
+  deliberate vulnerabilities and false positives.
 * Failure paths are first-class: unreachable servers, unknown models, wrong passphrase, protected
   branches, timeouts, empty checks.
 * `ruff check` + `ruff format --check` are clean; both are part of `make lint`.

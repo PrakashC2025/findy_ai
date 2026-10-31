@@ -169,3 +169,97 @@ def test_repo_context_is_automatic_only_inside_the_project(
     assert run(tmp_home, "ask", "--json", "how does refund work?") == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["memory"]["code_hits"]
+
+
+def test_check_runs_in_a_sandbox_and_reports_findings(
+    tmp_home: Path, tmp_path: Path, capsys
+) -> None:
+    project = write_project(tmp_path / "shop")
+    (project / "pyproject.toml").write_text("[project]\nname='shop'\nversion='0.1.0'\n")
+    # devmind: allow code.eval
+    (project / "pkg" / "unsafe.py").write_text("value = eval(input())\n")
+
+    code = run(tmp_home, "check", str(project), "--json", "--timeout", "120")
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["checks"][0]["name"] == "pytest"
+    assert payload["checks"][0]["ok"] is True
+    assert any(item["rule"] == "code.eval" for item in payload["security"])
+    assert payload["ok"] is False
+
+
+def test_check_fails_when_the_suite_fails(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    project = write_project(tmp_path / "shop")
+    (project / "pyproject.toml").write_text("[project]\nname='shop'\nversion='0.1.0'\n")
+    (project / "tests" / "test_billing.py").write_text(
+        "from pkg.billing import refund_order\n\ndef test_refund():\n    assert refund_order(1) == 2\n"
+    )
+    code = run(tmp_home, "check", str(project), "--json", "--timeout", "120")
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["checks"][0]["ok"] is False
+    assert "assert" in payload["checks"][0]["output"]
+
+
+def test_check_without_checks_is_honest(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert run(tmp_home, "check", str(empty)) == 1
+    captured = capsys.readouterr()
+    assert "nothing is verified" in captured.out + captured.err
+
+
+def test_scan_blocks_high_severity_and_json(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    project = tmp_path / "app"
+    project.mkdir()
+    # devmind: allow sql.interpolation, sql.dynamic
+    (project / "db.py").write_text('cursor.execute(f"SELECT * FROM t WHERE id = {user_id}")\n')
+    assert run(tmp_home, "scan", str(project), "--json") == 1
+    findings = json.loads(capsys.readouterr().out)
+    assert findings[0]["rule"] == "sql.interpolation"
+    assert findings[0]["severity"] == "high"
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    (clean / "ok.py").write_text("print('hello')\n")
+    assert run(tmp_home, "scan", str(clean)) == 0
+    captured = capsys.readouterr()
+    assert "clean" in captured.out + captured.err
+
+
+def test_languages_lists_packs_for_a_ts_project(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    root = tmp_path / "web"
+    (root / "src").mkdir(parents=True)
+    (root / "package.json").write_text(json.dumps({"dependencies": {"react": "^19.0.0"}}))
+    (root / "tsconfig.json").write_text("{}")
+    (root / "src" / "App.tsx").write_text("export const App = () => <div />;\n")
+
+    assert run(tmp_home, "languages", "--root", str(root), "--json") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert any(pack["id"] == "typescript" for pack in payload["packs"])
+
+    assert run(tmp_home, "languages", "--root", str(root)) == 0
+    out = capsys.readouterr().out
+    assert "TypeScript" in out
+    assert "tsc --noEmit" in out
+
+
+def test_fix_without_checks_explains_instead_of_guessing(
+    tmp_home: Path, tmp_path: Path, capsys
+) -> None:
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    assert run(tmp_home, "fix", "make it work", "--root", str(empty)) == 1
+    captured = capsys.readouterr()
+    assert "cannot verify a patch" in captured.out + captured.err
+
+
+def test_fix_demo_mode_refuses_to_pretend(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    project = write_project(tmp_path / "shop")
+    (project / "pyproject.toml").write_text("[project]\nname='shop'\nversion='0.1.0'\n")
+    code = run(tmp_home, "fix", "the refund test fails", "--root", str(project))
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "demo mode has no model" in captured.out + captured.err
+    # Nothing was written to the project.
+    assert (project / "pkg" / "billing.py").read_text().count("refund_order") == 1

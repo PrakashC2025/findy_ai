@@ -8,6 +8,7 @@ from devmind.security import looks_like_secret, redact, redact_secrets
 
 def test_provider_keys_are_redacted() -> None:
     text = (
+        # devmind: allow secret.openai_key
         "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456\n"
         "GROQ=gsk_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ\n"
         "GOOGLE=" + "AIza" + "A" * 35 + "\n"
@@ -21,6 +22,7 @@ def test_provider_keys_are_redacted() -> None:
 
 
 def test_private_keys_and_tokens_are_redacted() -> None:
+    # devmind: allow secret.private_key
     pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----"
     assert "MIIEow" not in redact_secrets(f"key: {pem}")
     assert redact_secrets("token ghp_" + "a" * 36) == "token [REDACTED:github_token]"

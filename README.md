@@ -19,11 +19,12 @@ $ devmind ask --repo . "why does refund_order double-charge retried orders?"
 <streamed answer citing services/billing/refund.py:41-67>
 ```
 
-> **Status: steps 1-2 complete, 130 tests.** Backend abstraction, llama.cpp + Ollama + demo
+> **Status: steps 1-3 complete, 189 tests.** Backend abstraction, llama.cpp + Ollama + demo
 > backends, portable SQLite schema, incremental code indexer, cited retrieval, GitHub module
-> (device login, encrypted token, clone/branch/PR) and a verification runner (local tests or
-> GitHub Actions). The PWA, ensemble judge, web grounding, fine-tuning, Drive backup and the
-> evaluation suite are **not built yet** — see the roadmap and "What is real today".
+> (device login, encrypted token, clone/branch/PR), a limit-enforcing sandbox, a security scanner,
+> a self-repair loop that only accepts patches the project's own checks pass, language packs and a
+> confidence score built from evidence. The PWA, ensemble judge, web grounding, fine-tuning, Drive
+> backup and the evaluation suite are **not built yet** — see the roadmap and "What is real today".
 
 ---
 
@@ -113,7 +114,11 @@ devmind --demo ask "explain this traceback"
 | `devmind index [PATH] [--force] [--json]` | Incremental, resumable code index |
 | `devmind search "…" [--repo R] [-k N]` | Code search with `file:line` |
 | `devmind repos` | Indexed repositories and sizes |
-| `devmind verify [PATH]` | Run the project's tests locally |
+| `devmind check [PATH]` | Run tests/lint/build under CPU/memory/time limits + security scan |
+| `devmind fix "…" [--apply]` | Ask for a unified diff, verify it on a copy, retry up to 3 rounds |
+| `devmind scan [PATH]` | Security scan (secrets, injection, unsafe deserialisation, XSS) |
+| `devmind languages [--root PATH]` | Which language packs apply, with commands and docs links |
+| `devmind verify [PATH]` | Run the project's tests locally (no limits) |
 | `devmind verify --github OWNER/REPO --ref BRANCH [--workflow test.yml]` | Trigger/read GitHub Actions |
 | `devmind github login` | Device-flow login (or `--token` for a fine-grained PAT) |
 | `devmind github status\|repos\|clone` | Account, repositories, private clone |
@@ -154,13 +159,32 @@ See [docs/github.md](docs/github.md) for the one-time OAuth App setup (free).
 
 ## Verification before presentation
 
-`devmind verify .` detects the project's own test command (pytest, `npm test`, `cargo test`,
-`go test`, `make test`), runs it with a timeout and a scrubbed environment (no tokens, `CI=1`) and
-shows the tail of the output. When the suite only runs in CI, `devmind verify --github …` dispatches
-the workflow on your branch and reports the conclusion plus the failed job/step.
+```bash
+$ devmind check .
+limits: time 300s · cpu 300s · memory 2048MB · file writes 64MB · processes 64 · network: not isolated (unshare unavailable) · filesystem: throwaway copy
+✗ pytest (233 ms)
+E       assert -1 == 5
+security scan: 1 high
+  HIGH pkg/calc.py:2 SQL built by interpolating a value (sql.interpolation)
 
-An honest limit: green tests mean the project's checks passed, not that the code is correct, and
-local checks are not yet a security sandbox (step 3).
+verification: FAIL · 1 check(s), 1 finding(s), 235 ms
+```
+
+* `devmind check` runs the project's own commands under `rlimit`s (CPU, memory, file size, processes),
+  with host secrets stripped from the environment and an optional empty network namespace.
+* `devmind fix "…"` asks for a **unified diff**, applies it to a **throwaway copy**, rejects it if the
+  security scan finds something high-severity, runs the checks, and feeds real failing output back to
+  the model — at most three rounds, then an honest failure report. `--apply` writes the winning diff
+  and re-runs the checks on your tree.
+* `devmind scan` covers the mistakes assistants actually make: committed keys, `eval`/`exec`,
+  `shell=True`, `pickle`, `yaml.load`, SQL built by interpolation, `innerHTML`, path traversal.
+* Every answer carries a confidence score computed from citations, executed checks, repair rounds and
+  stray links — never from the model's self-report.
+
+Green tests mean the project's checks passed, not that the code is correct; a weak suite still passes.
+Details, limits and suppression syntax: [docs/verification.md](docs/verification.md).
+Language packs: [docs/languages.md](docs/languages.md). Command permissions:
+[docs/permissions.md](docs/permissions.md).
 
 ## Privacy
 
@@ -175,8 +199,8 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 |---|---|---|
 | 1 | Config, hardware detection, registry, router, Ollama, CLI, memory | **Done** |
 | 2 | Backend interface + llama.cpp, portable SQLite schema, indexer, cited retrieval, GitHub, verification | **Done, 130 tests** |
-| 3 | Full verification pipeline (sandbox, self-repair loop) | Not started |
-| 4 | Ensemble + judge, answer confidence | Not started |
+| 3 | Sandbox (limits, scrubbed env, optional netns), security scan, self-repair loop, confidence, language packs | **Done, 189 tests** |
+| 4 | Difficulty classifier + reasoning pipeline; ensemble + judge | Difficulty done; ensemble/judge not started |
 | 5 | Web knowledge layer (cache, version detection, injection defence) | Not started |
 | 6 | Feedback capture + LoRA with auto-rollback | Feedback storage done; training not started |
 | 7 | Google Drive backend with encryption | Not started |
@@ -194,14 +218,27 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 * **`models.toml` instead of YAML**: `tomllib` is stdlib. Same schema semantics.
 * **Hashing embeddings first**: zero-download, microsecond retrieval. Real embeddings
   (`nomic-embed-text`) come with the PWA work; the schema/interface already supports swapping.
-* **Local test execution is not sandboxed yet.** Timeouts and a scrubbed environment only; real
-  isolation is step 3.
+* **The sandbox is `rlimit`s, not a container.** CPU/memory/file/process limits, an environment
+  allow-list and an optional empty network namespace (`unshare -n`). There is no seccomp filter and no
+  user namespace, so it stops accidents, not a determined attacker. Stated the same way in the CLI.
+* **Self-repair needs a model that emits unified diffs.** Small models often do not; that round is
+  recorded as "no diff" instead of being retried forever. Demo mode refuses to propose patches.
+* **The security scanner is ~20 regex rules.** Useful, explainable, and false-positive-prone by
+  design; it does not replace a real SAST tool. High-severity findings block an automatic patch.
+* **No ensemble, judge, two-tier answering or reasoning pipeline yet.** One model answers; the
+  difficulty classifier and confidence score exist, but sampling 3 candidates and judging them is
+  step 4.
+* **No web grounding yet** (step 5), so "current" library behaviour is answered from the model and
+  the project only — and the prompt says so.
+* **No system control.** DevMind runs the checks a project defines and writes a verified diff when you
+  pass `--apply`. Arbitrary shell execution needs the approval-gated design in
+  [docs/permissions.md](docs/permissions.md); it is not implemented.
 
 ## Develop
 
 ```bash
 make install    # editable install + dev extras
-make test       # 130 tests
+make test       # 189 tests
 make lint       # ruff check + format check
 make demo       # doctor + models + a routed demo answer, no model needed
 ```
@@ -221,9 +258,15 @@ devmind/
   prompts.py        hard rules, task guidance, prompt assembly
   security.py       secret redaction
   github.py         device flow, encrypted token, API client, git workspace, PR flow
-  verify.py         local test runner + GitHub Actions verifier
+  verify.py         check detection, local runner, GitHub Actions verifier
+  sandbox.py        throwaway copies + rlimits + scrubbed env + optional netns
+  security_scan.py  secrets, injection, deserialisation, XSS rules + allow directives
+  repair.py         diff extraction, git apply, verified self-repair loop
+  confidence.py     evidence-based confidence scoring
+  difficulty.py     trivial/normal/hard classifier with time budgets
+  languages.py      language packs (commands, docs, notes, pitfalls)
   storage/schema.sql  portable schema shared with the PWA
-tests/              130 tests · docs/ · ARCHITECTURE.md
+tests/              189 tests · docs/ · ARCHITECTURE.md
 ```
 
 ## License

@@ -26,7 +26,9 @@ from .backends import (
     OllamaBackend,
     get_backend,
 )
+from .confidence import assess
 from .config import Config
+from .difficulty import classify_difficulty
 from .github import (
     CredentialStore,
     DeviceFlow,
@@ -37,12 +39,17 @@ from .github import (
 )
 from .hardware import Hardware
 from .indexer import CodeIndexer
+from .languages import detect_languages, project_packs
 from .memory.retriever import Retriever
 from .memory.store import MemoryStore
 from .prompts import build_messages
 from .registry import Model, Registry
+from .repair import SelfRepairer, apply_diff
+from .sandbox import Sandbox, SandboxLimits, scan_protections
 from .security import redact
-from .verify import ActionsVerifier, run_local_checks, summarise
+from .security_scan import blocking, scan_paths
+from .security_scan import summarise as scan_summarise
+from .verify import ActionsVerifier, detect_checks, run_local_checks, summarise
 from .router import Router, classify
 
 # --------------------------------------------------------------------- output
@@ -485,6 +492,7 @@ async def _answer(
             "hint": f"devmind pull {decision.model.id}",
         }
 
+    difficulty = classify_difficulty(prompt)
     if show_route and not json_output:
         print(
             paint(
@@ -495,6 +503,13 @@ async def _answer(
             file=sys.stderr,
         )
         info(decision.reason)
+        info(
+            paint(
+                f"difficulty: {difficulty.level} ({difficulty.score}/100, "
+                f"budget {difficulty.budget_s():.0f}s) — {'; '.join(difficulty.reasons[:2])}",
+                _DIM,
+            )
+        )
 
     if redact(prompt).changed:
         warn(
@@ -590,9 +605,17 @@ async def _answer(
     if route_id:
         ctx.store.set_route_outcome(route_id, "error" if error else "answered")
 
+    confidence = assess(
+        answer,
+        sources=len(context.citations),
+        check_results=[],
+        demo=isinstance(ctx.backend, DemoBackend),
+    )
     result = {
         "prompt": prompt,
         "answer": answer,
+        "confidence": confidence.to_dict(),
+        "difficulty": difficulty.to_dict(),
         "route": decision.to_dict(),
         "memory": context.to_dict(),
         "learned": captured,
@@ -609,11 +632,14 @@ async def _answer(
         print(
             paint(
                 f"— {decision.model.id} · first token {first_token_ms or 0:.0f} ms · "
-                f"total {elapsed_ms / 1000:.1f} s",
+                f"total {elapsed_ms / 1000:.1f} s · confidence {confidence.label} "
+                f"({confidence.score:.2f})",
                 _DIM,
             ),
             file=sys.stderr,
         )
+        if confidence.reasons:
+            info(paint(confidence.render(), _DIM))
     return result
 
 
@@ -1161,6 +1187,244 @@ def cmd_verify(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------- parser
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """Sandboxed verification gate: run the checks, scan, and say what is unknown."""
+    root = Path(args.path or os.getcwd()).expanduser().resolve()
+    if not root.is_dir():
+        fail(f"{root} is not a directory")
+        return 2
+    sandbox = None if args.no_sandbox else Sandbox(SandboxLimits(timeout_s=args.timeout))
+    if sandbox is not None and not args.json:
+        info("limits: " + " · ".join(scan_protections(sandbox.limits)))
+        info("checks run in your project directory under these limits (repair uses copies)")
+    started = time.perf_counter()
+    results = run_local_checks(root, timeout=args.timeout, sandbox=sandbox)
+    findings = [] if args.no_scan else scan_paths(root)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    ran = [result for result in results if not result.skipped]
+    blocked = blocking(findings)
+    ok = bool(ran) and all(result.ok for result in ran) and not blocked
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "ok": ok,
+                    "root": str(root),
+                    "checks": [result.to_dict() for result in results],
+                    "security": [finding.to_dict() for finding in findings],
+                    "elapsed_ms": round(elapsed_ms, 1),
+                },
+                indent=2,
+            )
+        )
+        return 0 if ok else 1
+
+    for result in results:
+        if result.skipped:
+            warn(f"{result.name}: skipped - {result.skipped_reason}")
+            continue
+        mark = paint("✓", _GREEN) if result.ok else paint("✗", _RED)
+        print(f"{mark} {result.name} ({result.duration_ms:.0f} ms)")
+        if not result.ok:
+            print(result.output[-1200:])
+    if findings:
+        for finding in findings[:15]:
+            color = _RED if finding.severity == "high" else _YELLOW
+            print(
+                f"  {paint(finding.severity, color)} {finding.path}:{finding.line} "
+                f"{finding.message} ({finding.rule})"
+            )
+            if finding.excerpt:
+                print(paint(f"    {finding.excerpt}", _DIM))
+    print()
+    print(scan_summarise(findings))
+    print()
+    if not ran:
+        warn("nothing to run, so nothing is verified")
+        return 1
+    print(
+        paint("verification: " + ("pass" if ok else "FAIL"), _GREEN if ok else _RED)
+        + paint(f" · {len(ran)} check(s), {len(findings)} finding(s), {elapsed_ms:.0f} ms", _DIM)
+    )
+    return 0 if ok else 1
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    root = Path(args.path or os.getcwd()).expanduser().resolve()
+    findings = scan_paths(root) if root.is_dir() else []
+    if not root.exists():
+        fail(f"{root} does not exist")
+        return 2
+    if args.json:
+        print(json.dumps([finding.to_dict() for finding in findings], indent=2))
+        return 1 if blocking(findings) else 0
+    if not findings:
+        ok("security scan: clean")
+        return 0
+    for finding in findings:
+        color = _RED if finding.severity == "high" else _YELLOW
+        print(
+            f"{paint(finding.severity.upper(), color)} {finding.path}:{finding.line} "
+            f"{finding.message} ({finding.rule})"
+        )
+        if finding.excerpt:
+            print(paint(f"  {finding.excerpt}", _DIM))
+        if finding.hint:
+            print(paint(f"  fix: {finding.hint}", _DIM))
+    print()
+    print(scan_summarise(findings))
+    return 1 if blocking(findings) else 0
+
+
+def cmd_languages(args: argparse.Namespace) -> int:
+    root = Path(args.root or os.getcwd()).expanduser().resolve()
+    ranked = detect_languages(root)
+    packs = project_packs(root)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "root": str(root),
+                    "detected": ranked,
+                    "packs": [pack.to_dict() for pack in packs],
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if not packs:
+        warn(f"no language pack matches {root}")
+        return 1
+    rows = []
+    for pack in packs:
+        files = next((item["files"] for item in ranked if item["id"] == pack.id), "-")
+        rows.append(
+            [
+                pack.name,
+                str(files),
+                pack.test or "-",
+                pack.lint or "-",
+                pack.typecheck or "-",
+                pack.docs,
+            ]
+        )
+    print(table(["language", "files", "test", "lint", "typecheck", "docs"], rows))
+    print()
+    for pack in packs[:2]:
+        print(paint(f"{pack.name} notes", _BOLD))
+        for note in pack.notes:
+            print(f"  · {note}")
+        for pitfall in pack.pitfalls[:3]:
+            print(paint(f"  ! {pitfall}", _DIM))
+    return 0
+
+
+async def _fix(ctx: Context, args: argparse.Namespace, root: Path, prompt: str) -> int:
+    checks = detect_checks(root)
+    if not checks:
+        fail(
+            "no test, lint or build command detected here, so DevMind cannot verify a patch. "
+            "Add a test command (pytest / npm test / cargo test / go test / make test) first."
+        )
+        return 1
+
+    if isinstance(ctx.backend, DemoBackend):
+        fail(
+            "demo mode has no model, so DevMind cannot propose a patch. "
+            "Start llama.cpp (or run with a real backend) first."
+        )
+        return 1
+
+    model = args.model
+    if model is None:
+        if ctx.is_single_model_backend():
+            model = ctx.config.llamacpp.model
+        else:
+            installed = await ctx.ensure_installed()
+            decision = ctx.router(installed).route(prompt)
+            if decision.model is None:
+                fail("no usable model; run `devmind doctor`")
+                return 2
+            model = decision.model.id
+
+    repo = ctx.default_repo()
+    if getattr(args, "repo", None):
+        root_arg = Path(args.repo).expanduser().resolve()
+        repo = CodeIndexer(ctx.store, ctx.config.index).index(root_arg).repo
+    context = ctx.retriever.context_for(prompt, repo=repo)
+    language = classify(prompt).language
+
+    if not args.json:
+        info(f"root: {root}")
+        info(f"checks: {', '.join(check.name for check in checks)}")
+        info(f"model: {model} · max {args.rounds} round(s)")
+        info("patches run on throwaway copies; nothing is written until --apply")
+
+    repairer = SelfRepairer(
+        ctx.backend,
+        model=model,
+        root=root,
+        checks=checks,
+        max_rounds=args.rounds,
+        timeout=args.timeout,
+    )
+    outcome = await repairer.run(prompt, context_block=context.block, language=language)
+
+    applied = False
+    post_checks: list[Any] = []
+    if outcome.ok and args.apply:
+        applied, message = apply_diff(root, outcome.diff)
+        if applied:
+            post_checks = run_local_checks(root, timeout=args.timeout)
+            applied = all(check.ok for check in post_checks if not check.skipped)
+        if not applied:
+            warn(f"could not apply the patch: {message}")
+
+    if args.json:
+        payload = outcome.to_dict()
+        payload["applied"] = applied
+        payload["post_checks"] = [check.to_dict() for check in post_checks]
+        print(json.dumps(payload, indent=2))
+        return 0 if outcome.ok and (not args.apply or applied) else 1
+
+    for attempt in outcome.attempts:
+        mark = paint("✓", _GREEN) if attempt.ok else paint("✗", _RED)
+        detail = attempt.error or summarise(attempt.checks)
+        print(f"{mark} round {attempt.round_no}: {detail}")
+    if outcome.diff:
+        print()
+        print(paint("proposed diff", _BOLD))
+        print(outcome.diff)
+    print()
+    print(paint(outcome.summary, _GREEN if outcome.ok else _RED))
+    print(paint(outcome.confidence.render(), _DIM))
+    if outcome.ok and not args.apply:
+        info("nothing was written. Re-run with --apply to write this diff.")
+    if applied:
+        ok("applied and re-verified on your tree")
+    return 0 if outcome.ok and (not args.apply or applied) else 1
+
+
+def cmd_fix(args: argparse.Namespace) -> int:
+    prompt = " ".join(args.problem).strip()
+    if not prompt:
+        fail('Describe the problem. Example: devmind fix "the tax test fails"')
+        return 2
+    ctx = Context(args)
+    root = Path(args.root or os.getcwd()).expanduser().resolve()
+    if not root.is_dir():
+        fail(f"{root} is not a directory")
+        return 2
+    try:
+        return asyncio.run(_fix(ctx, args, root, prompt))
+    except BackendUnavailable as exc:
+        fail(str(exc))
+        return 2
+    finally:
+        asyncio.run(ctx.aclose())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devmind",
@@ -1282,6 +1546,45 @@ def build_parser() -> argparse.ArgumentParser:
     github.add_argument("--draft", action="store_true")
     github.add_argument("--json", action="store_true")
     github.set_defaults(func=cmd_github)
+
+    check = sub.add_parser(
+        "check",
+        help="run tests/lint/build under limits and scan for security problems",
+        parents=[common],
+    )
+    check.add_argument("path", nargs="?", help="project root (default: current directory)")
+    check.add_argument("--timeout", type=float, default=300)
+    check.add_argument("--no-sandbox", action="store_true", help="run without resource limits")
+    check.add_argument("--no-scan", action="store_true", help="skip the security scan")
+    check.add_argument("--json", action="store_true")
+    check.set_defaults(func=cmd_check)
+
+    scan = sub.add_parser("scan", help="security scan a project", parents=[common])
+    scan.add_argument("path", nargs="?")
+    scan.add_argument("--json", action="store_true")
+    scan.set_defaults(func=cmd_scan)
+
+    languages = sub.add_parser(
+        "languages", help="show the language packs that apply to a project", parents=[common]
+    )
+    languages.add_argument("--root", help="project root (default: current directory)")
+    languages.add_argument("--json", action="store_true")
+    languages.set_defaults(func=cmd_languages)
+
+    fix = sub.add_parser(
+        "fix",
+        help="ask the model for a diff, verify it on a copy, optionally apply it",
+        parents=[common],
+    )
+    fix.add_argument("problem", nargs="+")
+    fix.add_argument("--root", help="project root (default: current directory)")
+    fix.add_argument("--repo", metavar="PATH", help="index this repository for context")
+    fix.add_argument("-m", "--model", help="force a model id")
+    fix.add_argument("--rounds", type=int, default=3, help="max self-repair rounds (1-5)")
+    fix.add_argument("--timeout", type=float, default=300.0, help="seconds per check")
+    fix.add_argument("--apply", action="store_true", help="write the verified diff to your tree")
+    fix.add_argument("--json", action="store_true")
+    fix.set_defaults(func=cmd_fix)
 
     verify = sub.add_parser(
         "verify", help="run project tests locally or read GitHub Actions", parents=[common]
