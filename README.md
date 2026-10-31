@@ -10,7 +10,7 @@ No telemetry.
 
 ```
 $ devmind serve --open           # or double-click scripts/devmind.command / .bat
-DevMind 0.5.0 on http://127.0.0.1:8787
+DevMind 0.5.1 on http://127.0.0.1:8787
 
 $ devmind index .
 ✓ shop: 214 indexed, 0 unchanged, 0 removed, 3120 chunks, 2680 symbols in 8.3s - complete

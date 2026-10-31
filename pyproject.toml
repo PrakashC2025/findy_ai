@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devmind"
-version = "0.5.0"
+version = "0.5.1"
 description = "DevMind — a free, local-first coding assistant that learns your codebase."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -23,6 +23,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import stat
 import subprocess
 import time
@@ -36,6 +37,43 @@ GITHUB_API = "https://api.github.com"
 DEVICE_CODE_URL = "https://github.com/login/device/code"
 ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 DEFAULT_PROTECTED = {"main", "master", "trunk", "develop"}
+
+# A browser URL for a file, branch or issue, e.g. .../repo/tree/main/src - users paste these.
+_GITHUB_PAGE = re.compile(
+    r"^https?://(?:www\.)?github\.com/(?P<owner>[^/]+)/(?P<repo>[^/?#]+)"
+    r"(?:/(?:tree|blob|commits|issues|pull|releases|actions|wiki|discussions)/.*)?$"
+)
+
+
+def normalise_git_url(url: str) -> str:
+    """Accept what people actually paste and turn it into something ``git clone`` likes.
+
+    * ``https://github.com/owner/repo/tree/main/src`` -> ``https://github.com/owner/repo.git``
+    * ``https://github.com/owner/repo`` -> ``.../repo.git``
+    * ``git@github.com:owner/repo.git`` and local paths are returned untouched.
+    """
+    text = (url or "").strip()
+    if not text:
+        return ""
+    if len(text) < 4096 and Path(text).expanduser().exists():
+        return str(Path(text).expanduser())
+    text = text.split("?")[0].split("#")[0].rstrip("/")
+    match = _GITHUB_PAGE.match(text)
+    if match:
+        name = match.group("repo").removesuffix(".git")
+        return f"https://github.com/{match.group('owner')}/{name}.git"
+    return text
+
+
+def repo_name_from_url(url: str) -> str:
+    """A short, filesystem-safe-ish name for a clone target."""
+    text = normalise_git_url(url).rstrip("/")
+    if text.endswith(".git"):
+        text = text[:-4]
+    base = text.split("/")[-1]
+    if ":" in base and "@" in base.split(":")[0]:
+        base = base.split(":")[-1]
+    return base or "repo"
 
 
 class GitHubError(RuntimeError):
@@ -425,7 +463,8 @@ class GitWorkspace:
 
     # ------------------------------------------------------------------ setup
     def clone(self, repo: str, dest: str | Path | None = None, *, depth: int | None = None) -> Path:
-        target = Path(dest).expanduser() if dest else self.root / repo.split("/")[-1]
+        repo = normalise_git_url(repo)
+        target = Path(dest).expanduser() if dest else self.root / repo_name_from_url(repo)
         if target.exists() and any(target.iterdir()):
             return target  # already cloned; caller can `fetch`
         target.parent.mkdir(parents=True, exist_ok=True)

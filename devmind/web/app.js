@@ -83,15 +83,28 @@
     try {
       const response = await api("/api/status");
       const data = await response.json();
+      const healthy = !data.health || data.health.ok;
       const model = data.demo ? "demo (no model)" : data.model || data.backend;
-      pill.textContent = `${model} · ${data.counts.repos} project(s)`;
-      pill.className = "pill " + (data.demo ? "bad" : "ok");
+      pill.textContent = healthy ? `${model} · ${data.counts.repos} project(s)` : "model offline";
+      pill.className = "pill " + (data.demo || !healthy ? "bad" : "ok");
       pill.title = `backend ${data.backend} · cache ${data.counts.cache.entries} · sandbox: ${data.sandbox.join(" · ")}`;
+      showHealth(data);
     } catch (error) {
       pill.textContent = "offline";
       pill.className = "pill bad";
       pill.title = String(error.message || error);
     }
+  }
+
+  function showHealth(data) {
+    const banner = $("backend-alert");
+    if (!banner) return;
+    if (data.demo || !data.health || data.health.ok) {
+      banner.hidden = true;
+      return;
+    }
+    banner.hidden = false;
+    $("backend-alert-text").textContent = data.health.detail;
   }
 
   // ------------------------------------------------------------------ repos
@@ -119,7 +132,24 @@
       state.repo = repos[0].repo;
       localStorage.setItem("devmind_repo", state.repo);
     }
+    showProjectInfo(repos);
     return repos;
+  }
+
+  function showProjectInfo(repos) {
+    const info = $("project-info");
+    if (!info) return;
+    const entry = (repos || []).find((row) => row.repo === state.repo);
+    if (!entry) {
+      info.hidden = true;
+      return;
+    }
+    info.hidden = false;
+    info.textContent =
+      `linked: ${entry.repo}` +
+      ` · ${entry.root || "location unknown"}` +
+      ` · ${entry.files} files · ${entry.chunks} chunks`;
+    info.title = "answers cite files from this folder";
   }
 
   async function openFolder() {
@@ -137,6 +167,7 @@
       $("path-input").value = "";
       await loadRepos(report.repo);
       await loadStatus();
+      await listFiles();
       $("files-hint").textContent = `${report.repo}: ${report.indexed} files · ${report.chunks} chunks · ${report.symbols} symbols`;
     } catch (error) {
       $("files-hint").textContent = String(error.message || error);
@@ -158,11 +189,18 @@
       $("git-input").value = "";
       await loadRepos(data.repo);
       await loadStatus();
-      $("files-hint").textContent = data.already
-        ? `${data.repo} is already cloned at ${data.root}`
-        : data.summary || `${data.repo}: ${data.indexed} files`;
+      await listFiles();
+      const note = $("clone-note");
+      note.hidden = false;
+      note.className = "hint clone-note";
+      note.textContent = data.already
+        ? `Already cloned ${data.repo} → ${data.root} · ${data.files || 0} files indexed (refreshed)`
+        : `Cloned ${data.repo} → ${data.root} · ${data.files || data.indexed || 0} files · ${data.chunks || 0} chunks · ${data.symbols || 0} symbols`;
     } catch (error) {
-      $("files-hint").textContent = String(error.message || error);
+      const note = $("clone-note");
+      note.hidden = false;
+      note.className = "err clone-note";
+      note.textContent = String(error.message || error);
     } finally {
       button.disabled = false;
       button.textContent = "Clone";
@@ -505,6 +543,7 @@
     $("fix-out").innerHTML = "";
   };
   $("refresh-btn").onclick = async () => { await loadRepos(); await loadStatus(); };
+  $("backend-retry").onclick = async () => { await loadStatus(); };
   $("open-btn").onclick = openFolder;
   $("clone-btn").onclick = cloneRepo;
   $("git-input").addEventListener("keydown", (event) => { if (event.key === "Enter") cloneRepo(); });

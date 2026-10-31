@@ -36,6 +36,13 @@
     <button class="ghost" id="clone-btn">Clone</button>
     <button class="ghost" id="refresh-btn" title="refresh projects">↻</button>
   </section>
+  <div class="banner" id="backend-alert" role="alert" hidden>
+    <strong>No model is answering.</strong>
+    <span id="backend-alert-text"></span>
+    <button class="ghost" id="backend-retry">Retry</button>
+  </div>
+  <div class="linked" id="project-info" hidden></div>
+  <p class="hint clone-note" id="clone-note" role="status" hidden></p>
 
   <nav class="tabs" role="tablist">
     <button role="tab" id="tab-ask" aria-selected="true" aria-controls="panel-ask">Ask</button>

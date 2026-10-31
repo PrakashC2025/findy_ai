@@ -39,7 +39,7 @@ from .backends import (
 from .confidence import assess
 from .config import Config
 from .difficulty import classify_difficulty
-from .github import GitHubError, GitWorkspace
+from .github import GitHubError, GitWorkspace, normalise_git_url, repo_name_from_url
 from .hardware import Hardware
 from .indexer import CodeIndexer
 from .languages import project_packs, style_block
@@ -266,6 +266,19 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+        if not runtime.demo:
+            try:
+                health = await runtime.backend.health()
+            except Exception as exc:  # never block startup on a broken backend
+                health = None
+                print(f"DevMind: could not check the model backend: {exc}")
+            if health is not None and not health.ok:
+                print("")
+                print("DevMind: the web UI is starting, but NO model is answering yet.")
+                for line in health.detail.splitlines():
+                    print(f"  {line}")
+                print("  This is shown in red at the top of the app until it is fixed.")
+                print("")
         yield
         await runtime.aclose()
 
@@ -323,6 +336,12 @@ def create_app(
     async def api_status() -> dict[str, Any]:
         payload = runtime.status()
         payload["checks"] = [spec.name for spec in detect_checks(Path.cwd())]
+        try:
+            health = await runtime.backend.health()
+            payload["health"] = health.to_dict()
+        except Exception as exc:  # status must never 500
+            payload["health"] = {"ok": False, "detail": str(exc), "version": "", "models": 0}
+        payload["health"]["base_url"] = getattr(runtime.backend, "base_url", "")
         return payload
 
     @app.get("/api/repos")
@@ -383,18 +402,15 @@ def create_app(
         authenticated CLI (`devmind github login` + `devmind github clone`)
         because the web app never holds your passphrase.
         """
-        url = request.url.strip()
-        raw_name = request.name.strip() or url.rstrip("/").split("/")[-1]
+        url = normalise_git_url(request.url)
+        if not url:
+            raise HTTPException(status_code=400, detail="paste a git URL or owner/name")
+        raw_name = request.name.strip() or repo_name_from_url(request.url)
         safe = re.sub(r"[^A-Za-z0-9._-]", "-", raw_name.removesuffix(".git"))[:80] or "repo"
         dest = runtime.config.home / "repos" / safe
-        if dest.exists() and any(dest.iterdir()):
-            return {
-                "already": True,
-                "repo": safe,
-                "root": str(dest),
-                "detail": "already cloned; open this folder to index it",
-            }
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        already = dest.exists() and any(dest.iterdir())
+        if not already:
+            dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             target = await asyncio.to_thread(GitWorkspace(dest.parent).clone, url, dest, depth=1)
         except GitHubError as exc:
@@ -412,11 +428,15 @@ def create_app(
         report = await asyncio.to_thread(
             CodeIndexer(runtime.store, runtime.config.index).index, target, repo=safe
         )
+        stats = next(
+            (entry for entry in runtime.store.list_repos() if entry["repo"] == report.repo), {}
+        )
         return {
-            "already": False,
+            "already": already,
             "repo": report.repo,
             "root": str(target),
             "indexed": report.indexed,
+            "files": stats.get("files", 0),
             "chunks": report.chunks,
             "symbols": report.symbols,
             "summary": report.summary(),

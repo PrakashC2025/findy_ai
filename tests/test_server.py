@@ -244,3 +244,44 @@ def test_brief_endpoints_round_trip(tmp_path: Path) -> None:
     cleared = _request(app, "POST", "/api/brief", json={"clear": True}).json()
     assert cleared["removed"] == 1
     assert _request(app, "GET", "/api/brief").json()["notes"] == []
+
+
+def test_status_reports_live_backend_health(tmp_path: Path) -> None:
+    payload = _request(_app(tmp_path), "GET", "/api/status").json()
+    assert payload["health"]["ok"] is True
+    assert "demo" in payload["health"]["detail"]
+
+
+def test_clone_twice_still_indexes_and_reports_counts(tmp_path: Path) -> None:
+    source = _git_source(tmp_path)
+    app = _app(tmp_path)
+    first = _request(app, "POST", "/api/clone", json={"url": str(source), "name": "linked"}).json()
+    assert first["already"] is False
+    assert first["files"] > 0
+
+    second = _request(app, "POST", "/api/clone", json={"url": str(source), "name": "linked"}).json()
+    assert second["already"] is True
+    assert second["repo"] == first["repo"]
+    assert second["files"] > 0, "a second clone must still link the folder, not just return a path"
+
+    repos = _request(app, "GET", "/api/repos").json()
+    assert any(entry["repo"] == first["repo"] and entry["root"] for entry in repos)
+
+
+def test_ui_explains_a_dead_model_server(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text('[llamacpp]\nbase_url = "http://127.0.0.1:9"\n')
+    app = create_app(home=home, demo=False, allow_roots=[str(tmp_path)])
+
+    async def go() -> None:
+        async with app.router.lifespan_context(app):
+            pass
+
+    asyncio.run(go())
+
+    html = _request(app, "GET", "/").text
+    assert 'id="backend-alert"' in html
+    scripts = _request(app, "GET", "/static/app.js").text
+    assert "showHealth" in scripts
+    assert "clone-note" in scripts

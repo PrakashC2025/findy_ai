@@ -84,7 +84,7 @@ devmind serve --host 0.0.0.0 --port 8787
 The terminal prints two URLs:
 
 ```
-DevMind 0.5.0 on http://127.0.0.1:8787
+DevMind 0.5.1 on http://127.0.0.1:8787
 Open: http://127.0.0.1:8787/?token=6Qk...
 Phone (same Wi-Fi): http://192.168.1.24:8787/?token=6Qk...
 ```
@@ -119,7 +119,11 @@ Then open `http://<pc-name>:8787/?token=…` from the phone. No port forwarding,
 refused with `403`.
 
 **Clone** takes a git URL (`https://…`, `git@…`, a local path, or GitHub's `owner/name` shorthand),
-clones it with depth 1 into `$DEVMIND_HOME/repos/<name>` and indexes it immediately. Public
+including the address bar URL of a file or branch
+(`https://github.com/owner/repo/tree/main/src` is trimmed to `owner/repo`). It clones with depth 1
+into `$DEVMIND_HOME/repos/<name>`, indexes it immediately, links it as the active project and shows
+the local path with file/chunk counts under the project bar. Cloning the same URL again does not
+re-download: it re-indexes the folder and links it, so a project cloned earlier still shows up. Public
 repositories need nothing else. Private repositories need the authenticated CLI once
 (`devmind github login` → `devmind github clone …`), because the web app never asks for your
 passphrase or stores your token in the browser.
@@ -157,6 +161,9 @@ still writing, and a later `replace` event upgrades the answer if the pipeline f
 * **`0.0.0.0` is plain HTTP.** The token protects the API, not the wire. Use a tunnel for anything
   beyond your own network.
 * **No accounts, no sync, no telemetry.** The server keeps everything in `$DEVMIND_HOME`.
+* **A local health banner, not a silent failure.** `/api/status` probes the backend; if nothing is
+  answering (or something that is not llama.cpp owns the port), the app shows the reason and the fix
+  at the top of the page with a **Retry** button, and a failed answer shows the same text.
 * **A remote provider is opt-in and server-side.** `/api/status` reports `cloud: true` only when a
   configured remote endpoint is usable; the browser never sees the key. See
   [remote.md](remote.md).

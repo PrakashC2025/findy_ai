@@ -34,6 +34,25 @@ model_size_gb = 4.7                  # used for memory-fit warnings
 context = 16384
 ```
 
+### "404" or an HTML page instead of an answer
+
+If DevMind reports something like *"answered with HTTP 404 and an HTML page"*, the address in
+`[llamacpp] base_url` is not a llama.cpp server. Usually a different program owns that port (a Flask
+app, a router admin page, an old project). Check before changing anything:
+
+```bash
+curl -s http://127.0.0.1:8080/v1/models
+# llama.cpp answers with JSON: {"object":"list","data":[{"id":"..."}]}
+```
+
+* JSON with a `data` list → the server is fine; the label in `model =` does not have to match.
+* HTML → wrong port or wrong program. Start `llama-server` on a free port and update `base_url`
+  (a bare address, no `/v1` suffix), or change the port in the start command.
+* Connection refused → nothing is listening there.
+
+`devmind doctor` prints the same diagnosis, the web app shows it in a red banner with a **Retry**
+button, and `devmind serve` prints it before the UI opens.
+
 ## Adding a model
 
 1. Check it runs locally: `ollama pull <id>`, then `ollama run <id>` once.

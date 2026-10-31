@@ -139,7 +139,35 @@ pre.file { max-height: 380px; overflow: auto; background: #0a121a; border: 1px s
 
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.err { color: var(--bad); }
+.err { color: var(--bad); white-space: pre-wrap; }
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #5a2626;
+  border-radius: 10px;
+  background: #241214;
+  color: var(--text);
+  font-size: 13px;
+}
+.banner strong { color: var(--bad); }
+.banner span { flex: 1; min-width: 200px; white-space: pre-wrap; }
+
+.linked {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.clone-note { margin: 6px 0 0; overflow-wrap: anywhere; }
 @media (max-width: 520px) {
   main { padding: 10px 10px 100px; }
   .project-bar select { max-width: none; width: 100%; }

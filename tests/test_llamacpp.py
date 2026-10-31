@@ -83,7 +83,46 @@ def test_server_error_is_actionable() -> None:
 
     with pytest.raises(BackendUnavailable) as excinfo:
         run(scenario())
-    assert "llama.cpp returned 500" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "HTTP 500" in message
+    assert "boom" in message
+
+
+def test_html_404_says_another_server_is_on_the_port() -> None:
+    html = (
+        '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">'
+        "<html><head><title>404 Not Found</title></head>"
+        "<body><h1>Not Found</h1><p>The requested URL was not found on this server.</p></body></html>"
+    )
+    backend = LlamaCppBackend(
+        "http://localhost:8080",
+        transport=httpx.MockTransport(lambda r: httpx.Response(404, text=html)),
+    )
+
+    async def scenario():
+        async for _ in backend.chat([{"role": "user", "content": "hi"}], "local-model"):
+            pass
+
+    with pytest.raises(BackendUnavailable) as excinfo:
+        run(scenario())
+    message = str(excinfo.value)
+    assert "not a llama.cpp server" in message
+    assert "llama-server -m" in message
+    assert "<html" not in message.lower()
+    assert len(message) < 900
+
+
+def test_health_reports_what_the_address_really_serves() -> None:
+    html = "<html><head><title>404 Not Found</title></head><body></body></html>"
+    backend = LlamaCppBackend(
+        "http://localhost:8080",
+        transport=httpx.MockTransport(lambda r: httpx.Response(404, text=html)),
+    )
+
+    health = run(backend.health())
+    assert health.ok is False
+    assert "not a llama.cpp server" in health.detail
+    assert backend.base_url == "http://localhost:8080"
 
 
 def test_unreachable_server_explains_how_to_start_it() -> None:

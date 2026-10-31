@@ -29,6 +29,12 @@ import httpx
 from .base import BackendUnavailable, Health, LoopClient, Message
 
 
+def looks_like_html(body: str) -> bool:
+    """True for an HTML error page - the usual sign that *another* server is on the port."""
+    head = (body or "").lstrip()[:400].lower()
+    return head.startswith("<!doctype") or head.startswith("<html") or "<title>" in head
+
+
 class LlamaCppBackend:
     name = "llamacpp"
     label = "llama.cpp server"
@@ -54,11 +60,19 @@ class LlamaCppBackend:
             transport=transport,
         )
 
+    @property
+    def base_url(self) -> str:
+        """The address this backend talks to, for status pages and error messages."""
+        return str(self._http.base_url)
+
     # ------------------------------------------------------------------ status
     async def list_models(self) -> list[str]:
         try:
             response = await self._http.client.get("/v1/models")
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise BackendUnavailable(
+                    self.http_problem(response.status_code, response.text, what="GET /v1/models")
+                )
             payload = response.json()
         except httpx.HTTPError as exc:
             raise BackendUnavailable(self.explain(exc)) from exc
@@ -72,10 +86,10 @@ class LlamaCppBackend:
     async def health(self) -> Health:
         try:
             response = await self._http.client.get("/health")
-            if response.status_code >= 500:
+            if response.status_code >= 400:
                 return Health(
                     False,
-                    f"server at {self._http.base_url} is not ready (HTTP {response.status_code})",
+                    self.http_problem(response.status_code, response.text, what="GET /health"),
                 )
             payload: dict[str, Any] = {}
             if response.content:
@@ -121,10 +135,13 @@ class LlamaCppBackend:
                 "POST", "/v1/chat/completions", json=payload
             ) as response:
                 if response.status_code >= 400:
-                    body = (await response.aread()).decode("utf-8", "ignore")[:400]
+                    body = (await response.aread()).decode("utf-8", "ignore")[:600]
                     raise BackendUnavailable(
-                        f"llama.cpp returned {response.status_code} for model '{payload['model']}': "
-                        f"{body}"
+                        self.http_problem(
+                            response.status_code,
+                            body,
+                            what=f"POST /v1/chat/completions (model '{payload['model']}')",
+                        )
                     )
                 async for line in response.aiter_lines():
                     line = line.strip()
@@ -155,6 +172,31 @@ class LlamaCppBackend:
             ) from exc
         except httpx.HTTPError as exc:
             raise BackendUnavailable(self.explain(exc)) from exc
+
+    # ---------------------------------------------------------------- problems
+    def http_problem(self, status: int, body: str, *, what: str = "") -> str:
+        """Turn an HTTP error into something a person can act on.
+
+        The important case is a 404 that is actually an HTML page: usually another
+        program (a Flask app, a router admin page, the wrong port) is answering
+        instead of llama.cpp. Printing 300 characters of its HTML helps nobody.
+        """
+        base = self._http.base_url
+        where = f"{base} answered {what or 'the request'}"
+        if looks_like_html(body):
+            return (
+                f"{where} with HTTP {status} and an HTML page, so something else is "
+                f"listening on that port - it is not a llama.cpp server.\n"
+                "Fix one of these:\n"
+                "  * start llama-server:  llama-server -m <model.gguf> --port 8080 -c 16384 -ngl 99\n"
+                "  * or correct [llamacpp] base_url in config.toml (a bare address, no path), "
+                "then run `devmind doctor`\n"
+                "  * or try the UI without a model: run `devmind serve --demo`"
+            )
+        snippet = " ".join((body or "").split())[:300]
+        return f"{where} with HTTP {status}: {snippet or 'no response body'}" + (
+            "\nRun `devmind doctor` to see what that address actually serves."
+        )
 
     # ------------------------------------------------------------------- close
     async def aclose(self) -> None:
