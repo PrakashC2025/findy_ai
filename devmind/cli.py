@@ -312,6 +312,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 checks.append((backend_label, "ok", f"{detail}, {len(installed)} model(s)"))
             else:
                 checks.append((backend_label, "fail", health.detail))
+                checks.append(
+                    (
+                        "Ports",
+                        "warn",
+                        "run `devmind ports` to see which local port actually has a model",
+                    )
+                )
 
     if installed:
         known = [name for name in installed if ctx.registry.get(name)]
@@ -1028,6 +1035,54 @@ def cmd_serve(args: argparse.Namespace) -> int:
     except OSError as exc:
         fail(f"could not start the server: {exc}")
         return 1
+
+
+def cmd_ports(args: argparse.Namespace) -> int:
+    """Answer the question behind most 404s: what is on these ports?"""
+    from .ports import LLAMA, OPENAI, scan
+
+    ports = list(range(args.start, args.end + 1))
+    reports = asyncio.run(scan(ports))
+
+    rows = []
+    for report in reports:
+        status = {
+            "llama.cpp": paint("llama.cpp", _GREEN),
+            "openai-compatible": paint("OpenAI API", _CYAN),
+            "other web app": paint("other app", _YELLOW),
+            "closed": paint("free", _DIM),
+        }.get(report.kind, report.kind)
+        rows.append([str(report.port), status, report.detail])
+    print(paint("Local ports", _BOLD))
+    print(table(["port", "what", "detail"], rows))
+    print()
+
+    found = [report for report in reports if report.kind == LLAMA]
+    openai = [report for report in reports if report.kind == OPENAI]
+    if found:
+        print(paint(f"✓ llama.cpp is on port {found[0].port}", _GREEN))
+        print(f'  set  [llamacpp] base_url = "http://127.0.0.1:{found[0].port}"')
+        print("  then devmind doctor")
+        return 0
+    if openai:
+        print(paint(f"✓ an OpenAI-compatible server is on port {openai[0].port}", _GREEN))
+        print(f'  set  [remote] base_url = "http://127.0.0.1:{openai[0].port}/v1"')
+        return 0
+
+    print(paint("✗ no llama.cpp or OpenAI-compatible server found on these ports", _YELLOW))
+    free = [report.port for report in reports if report.free]
+    if free:
+        port = free[0]
+        print()
+        print(paint("Start one:", _BOLD))
+        print(f"  llama-server -m <your-model.gguf> --port {port} -c 16384 -ngl 99")
+        print()
+        print(f'  then set  [llamacpp] base_url = "http://127.0.0.1:{port}"')
+    print()
+    print(paint("No GGUF yet? Ollama is the shortest path:", _BOLD))
+    print("  ollama pull qwen2.5-coder:7b")
+    print('  then set  [backend] kind = "ollama"   (and leave [llamacpp] alone)')
+    return 1
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -1815,6 +1870,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve_parser.add_argument("--open", action="store_true", help="open the browser")
     serve_parser.set_defaults(func=cmd_serve)
+
+    ports = sub.add_parser(
+        "ports", help="show what is listening on 8080-8090 (or any range)", parents=[common]
+    )
+    ports.add_argument("--from", dest="start", type=int, default=8080)
+    ports.add_argument("--to", dest="end", type=int, default=8090)
+    ports.set_defaults(func=cmd_ports)
 
     stats = sub.add_parser(
         "stats", help="memory stats and recent routing decisions", parents=[common]

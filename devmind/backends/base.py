@@ -51,6 +51,14 @@ class Backend(Protocol):
     async def aclose(self) -> None: ...
 
 
+def is_loopback(url: str) -> bool:
+    """True for 127.0.0.1 / localhost / ::1 - those must never go through a proxy."""
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
 class LoopClient:
     """An ``httpx.AsyncClient`` that survives ``asyncio.run()`` boundaries.
 
@@ -68,12 +76,16 @@ class LoopClient:
         connect_timeout: float = 3.0,
         request_timeout: float = 300.0,
         transport: httpx.BaseTransport | None = None,
+        trust_env: bool = True,
     ):
         self.base_url = base_url.rstrip("/")
         self.headers = {"User-Agent": "devmind/0.2", **(headers or {})}
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
         self.transport = transport
+        # trust_env=False means HTTP_PROXY/ALL_PROXY are ignored. A proxy that
+        # answers loopback with its own HTML 404 is a classic source of confusion.
+        self.trust_env = trust_env
         self._client: httpx.AsyncClient | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -87,6 +99,7 @@ class LoopClient:
                 timeout=httpx.Timeout(self.request_timeout, connect=self.connect_timeout),
                 limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
                 transport=self.transport,
+                trust_env=self.trust_env,
             )
             self._loop = loop
         return self._client

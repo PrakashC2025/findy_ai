@@ -155,3 +155,38 @@ def test_factory_selects_backend(tmp_home) -> None:
 
     config.offline = True
     assert get_backend(config).name == "demo"
+
+
+def test_health_falls_back_to_models_when_health_is_absent() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(404, text="not found")
+        return httpx.Response(200, json={"data": [{"id": "qwen2.5-coder-7b"}]})
+
+    backend = LlamaCppBackend("http://test", transport=httpx.MockTransport(handler))
+    health = run(backend.health())
+    assert health.ok is True
+    assert "OpenAI-compatible" in health.detail
+    assert health.models == 1
+
+
+def test_health_rejects_an_html_page_that_returns_200() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        html = "<html><head><title>Login</title></head><body>router</body></html>"
+        return httpx.Response(200, text=html, headers={"server": "nginx"})
+
+    backend = LlamaCppBackend("http://test", transport=httpx.MockTransport(handler))
+    health = run(backend.health())
+    assert health.ok is False
+    assert "not a llama.cpp server" in health.detail
+    assert "router" in health.detail.lower() or "login" in health.detail.lower()
+    assert "nginx" in health.detail
+
+
+def test_loopback_backends_never_use_a_proxy() -> None:
+    local = LlamaCppBackend("http://127.0.0.1:8080")
+    tunnelled = LlamaCppBackend("https://home-pc.example.ts.net")
+    assert local.local is True
+    assert local._http.trust_env is False
+    assert tunnelled.local is False
+    assert tunnelled._http.trust_env is True

@@ -84,7 +84,7 @@ devmind serve --host 0.0.0.0 --port 8787
 The terminal prints two URLs:
 
 ```
-DevMind 0.5.1 on http://127.0.0.1:8787
+DevMind 0.5.2 on http://127.0.0.1:8787
 Open: http://127.0.0.1:8787/?token=6Qk...
 Phone (same Wi-Fi): http://192.168.1.24:8787/?token=6Qk...
 ```
@@ -163,7 +163,9 @@ still writing, and a later `replace` event upgrades the answer if the pipeline f
 * **No accounts, no sync, no telemetry.** The server keeps everything in `$DEVMIND_HOME`.
 * **A local health banner, not a silent failure.** `/api/status` probes the backend; if nothing is
   answering (or something that is not llama.cpp owns the port), the app shows the reason and the fix
-  at the top of the page with a **Retry** button, and a failed answer shows the same text.
+  at the top of the page with a **Retry** button, and a failed answer shows the same text. The banner
+  names the page title and `Server` header it found, and `devmind ports` classifies 8080-8090 for
+  you. Loopback traffic never goes through `HTTP_PROXY`, so a proxy cannot fake a local model.
 * **A remote provider is opt-in and server-side.** `/api/status` reports `cloud: true` only when a
   configured remote endpoint is usable; the browser never sees the key. See
   [remote.md](remote.md).

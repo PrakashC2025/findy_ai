@@ -21,18 +21,27 @@ Then point DevMind at it::
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from collections.abc import AsyncIterator
 
 import httpx
 
-from .base import BackendUnavailable, Health, LoopClient, Message
+from .base import BackendUnavailable, Health, LoopClient, Message, is_loopback
 
 
 def looks_like_html(body: str) -> bool:
     """True for an HTML error page - the usual sign that *another* server is on the port."""
     head = (body or "").lstrip()[:400].lower()
     return head.startswith("<!doctype") or head.startswith("<html") or "<title>" in head
+
+
+def page_title(body: str) -> str:
+    """The <title> of an HTML page, trimmed - it often names the program answering."""
+    match = re.search(r"<title[^>]*>(.*?)</title>", body or "", re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    return " ".join(match.group(1).split())[:80]
 
 
 class LlamaCppBackend:
@@ -52,12 +61,14 @@ class LlamaCppBackend:
     ):
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.model = model
+        self.local = is_loopback(base_url)
         self._http = LoopClient(
             base_url,
             headers=headers,
             connect_timeout=connect_timeout,
             request_timeout=request_timeout,
             transport=transport,
+            trust_env=not self.local,
         )
 
     @property
@@ -73,7 +84,17 @@ class LlamaCppBackend:
                 raise BackendUnavailable(
                     self.http_problem(response.status_code, response.text, what="GET /v1/models")
                 )
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise BackendUnavailable(
+                    self.http_problem(
+                        response.status_code,
+                        response.text,
+                        what="GET /v1/models (did not return JSON)",
+                        server=response.headers.get("server", ""),
+                    )
+                ) from exc
         except httpx.HTTPError as exc:
             raise BackendUnavailable(self.explain(exc)) from exc
         ids = [
@@ -84,33 +105,63 @@ class LlamaCppBackend:
         return ids or [self.model]
 
     async def health(self) -> Health:
+        """Probe /health, then /v1/models.
+
+        Some OpenAI-compatible servers (LM Studio, vLLM, gateways) have no
+        /health at all. What matters for chat is /v1/models, so a missing
+        /health must not be reported as a broken server - but when both fail,
+        the error shown is the one that explains the problem.
+        """
         try:
             response = await self._http.client.get("/health")
-            if response.status_code >= 400:
-                return Health(
-                    False,
-                    self.http_problem(response.status_code, response.text, what="GET /health"),
-                )
-            payload: dict[str, Any] = {}
+        except httpx.HTTPError as exc:
+            return Health(False, self.explain(exc))
+
+        payload: dict[str, Any] = {}
+        health_ok = False
+        if response.status_code < 400 and not looks_like_html(response.text):
             if response.content:
                 try:
                     payload = response.json()
                 except json.JSONDecodeError:
                     payload = {}
             status = str(payload.get("status", "ok")).lower()
-            if status not in {"ok", "no slot available"}:
-                return Health(False, f"server reported status '{status}'")
-            models = await self.list_models()
+            if status in {"ok", "no slot available"}:
+                health_ok = True
+            else:
+                return Health(False, f"the server reported status '{status}'")
+
+        if health_ok:
+            try:
+                models = await self.list_models()
+            except BackendUnavailable as exc:
+                return Health(False, str(exc))
             return Health(
                 True,
                 f"llama.cpp server at {self._http.base_url}",
                 version=str(payload.get("build", "")),
                 models=len(models),
             )
+
+        try:
+            models = await self.list_models()
         except BackendUnavailable as exc:
-            return Health(False, str(exc))
-        except httpx.HTTPError as exc:
-            return Health(False, self.explain(exc))
+            first = (
+                self.http_problem(
+                    response.status_code,
+                    response.text,
+                    what="GET /health",
+                    server=response.headers.get("server", ""),
+                )
+                if response.status_code >= 400
+                else "the health endpoint returned something that is not llama.cpp JSON"
+            )
+            return Health(False, f"{first}\nGET /v1/models also failed: {exc}")
+        return Health(
+            True,
+            f"OpenAI-compatible server at {self._http.base_url} (no /health endpoint)",
+            models=len(models),
+        )
 
     # -------------------------------------------------------------------- chat
     async def chat(
@@ -174,7 +225,7 @@ class LlamaCppBackend:
             raise BackendUnavailable(self.explain(exc)) from exc
 
     # ---------------------------------------------------------------- problems
-    def http_problem(self, status: int, body: str, *, what: str = "") -> str:
+    def http_problem(self, status: int, body: str, *, what: str = "", server: str = "") -> str:
         """Turn an HTTP error into something a person can act on.
 
         The important case is a 404 that is actually an HTML page: usually another
@@ -184,14 +235,29 @@ class LlamaCppBackend:
         base = self._http.base_url
         where = f"{base} answered {what or 'the request'}"
         if looks_like_html(body):
+            clues = []
+            title = page_title(body)
+            if title:
+                clues.append(f"page title: {title!r}")
+            if server:
+                clues.append(f"Server header: {server}")
+            clue_text = f" ({'; '.join(clues)})" if clues else ""
+            proxy_hint = ""
+            if self.local:
+                proxy_hint = (
+                    "\n  * if this machine sets HTTP_PROXY/ALL_PROXY, a proxy can answer "
+                    "loopback requests; DevMind ignores proxies for 127.0.0.1, so check "
+                    "that something is really listening there (devmind ports)"
+                )
             return (
-                f"{where} with HTTP {status} and an HTML page, so something else is "
-                f"listening on that port - it is not a llama.cpp server.\n"
+                f"{where} with HTTP {status} and an HTML page{clue_text}, so something "
+                f"else is listening on that port - it is not a llama.cpp server.\n"
                 "Fix one of these:\n"
                 "  * start llama-server:  llama-server -m <model.gguf> --port 8080 -c 16384 -ngl 99\n"
                 "  * or correct [llamacpp] base_url in config.toml (a bare address, no path), "
                 "then run `devmind doctor`\n"
                 "  * or try the UI without a model: run `devmind serve --demo`"
+                f"{proxy_hint}"
             )
         snippet = " ".join((body or "").split())[:300]
         return f"{where} with HTTP {status}: {snippet or 'no response body'}" + (

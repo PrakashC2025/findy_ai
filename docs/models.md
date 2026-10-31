@@ -38,20 +38,61 @@ context = 16384
 
 If DevMind reports something like *"answered with HTTP 404 and an HTML page"*, the address in
 `[llamacpp] base_url` is not a llama.cpp server. Usually a different program owns that port (a Flask
-app, a router admin page, an old project). Check before changing anything:
+app, a router admin page, an old project), or a system proxy is answering loopback requests.
+
+Find out which, without guessing:
+
+```bash
+devmind ports                  # classifies 8080-8090: llama.cpp / OpenAI API / other app / free
+```
+
+It prints something like:
+
+```
+port  what       detail
+8080  other app  HTTP 404 on / · Server: nginx · title 'Router admin'
+8081  free       nothing is listening
+```
+
+Then either point DevMind at a port that has llama.cpp, or start it on a free one:
+
+```bash
+llama-server -m <your-model.gguf> --port 8081 -c 16384 -ngl 99
+```
+
+```toml
+[llamacpp]
+base_url = "http://127.0.0.1:8081"   # bare address, no /v1
+```
+
+Prefer to see it yourself:
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/models
-# llama.cpp answers with JSON: {"object":"list","data":[{"id":"..."}]}
 ```
 
-* JSON with a `data` list → the server is fine; the label in `model =` does not have to match.
-* HTML → wrong port or wrong program. Start `llama-server` on a free port and update `base_url`
-  (a bare address, no `/v1` suffix), or change the port in the start command.
+* JSON with a `data` list → a model server (llama.cpp, LM Studio, vLLM…); the `model =` label does
+  not have to match, and a missing `/health` is fine.
+* HTML → wrong port or wrong program.
 * Connection refused → nothing is listening there.
+* **A proxy is not involved for `127.0.0.1`.** DevMind ignores `HTTP_PROXY`/`ALL_PROXY` for loopback
+  addresses, so an HTML page from a proxy cannot be the explanation for a localhost address. For
+  non-loopback tunnels and `[remote]`, proxies are honoured.
 
-`devmind doctor` prints the same diagnosis, the web app shows it in a red banner with a **Retry**
-button, and `devmind serve` prints it before the UI opens.
+To see which program owns the port:
+
+```bat
+rem Windows
+netstat -ano | findstr :8080
+tasklist /FI "PID eq <the pid from the last column>"
+```
+```bash
+# macOS / Linux
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+```
+
+`devmind doctor` prints the same diagnosis and suggests `devmind ports`, the web app shows it in a
+red banner with a **Retry** button, and `devmind serve` prints it before the UI opens.
 
 ## Adding a model
 

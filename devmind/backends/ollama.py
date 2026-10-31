@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from .base import BackendUnavailable, Health, LoopClient, Message
+from .base import BackendUnavailable, Health, LoopClient, Message, is_loopback
 
 
 class OllamaBackend:
@@ -32,6 +32,7 @@ class OllamaBackend:
             connect_timeout=connect_timeout,
             request_timeout=request_timeout,
             transport=transport,
+            trust_env=not is_loopback(base_url),
         )
 
     @property
