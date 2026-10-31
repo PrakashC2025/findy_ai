@@ -74,3 +74,20 @@ def test_windows_launcher_is_windows_safe() -> None:
 def test_root_launchers_delegate() -> None:
     assert "scripts\\devmind.bat" in (ROOT / "START-DEVMIND.bat").read_text()
     assert "scripts/devmind.sh" in (ROOT / "START-DEVMIND.command").read_text()
+
+
+def test_windows_wrapper_runs_the_venv_without_path_changes() -> None:
+    raw = (ROOT / "devmind.bat").read_bytes()
+    text = raw.decode()
+    assert raw.count(b"\n") == raw.count(b"\r\n")
+    assert ".venv\\Scripts\\python.exe" in text
+    assert "-m devmind %*" in text
+    assert "START-DEVMIND.bat" in text, "a first-time user must be told how to create the venv"
+
+
+def test_windows_guide_covers_the_missing_winget_case() -> None:
+    guide = (ROOT / "docs" / "windows.md").read_text()
+    assert "OllamaSetup.exe" in guide
+    assert "does not exist on older Windows 10" in guide
+    assert "curl.exe" in guide
+    assert "Apache" in guide

@@ -65,6 +65,9 @@ set DEVMIND_LAUNCH_DRY_RUN=1
 START-DEVMIND.bat
 ```
 
+On Windows the `devmind` command is not on PATH; use `.\devmind.bat <command>` in the project
+folder (details in [windows.md](windows.md)).
+
 You can always bypass the launcher:
 
 ```bash
@@ -84,7 +87,7 @@ devmind serve --host 0.0.0.0 --port 8787
 The terminal prints two URLs:
 
 ```
-DevMind 0.6.1 on http://127.0.0.1:8787
+DevMind 0.6.2 on http://127.0.0.1:8787
 Open: http://127.0.0.1:8787/?token=6Qk...
 Phone (same Wi-Fi): http://192.168.1.24:8787/?token=6Qk...
 ```

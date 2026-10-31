@@ -10,7 +10,7 @@ No telemetry.
 
 ```
 $ devmind serve --open           # or double-click scripts/devmind.command / .bat
-DevMind 0.6.1 on http://127.0.0.1:8787
+DevMind 0.6.2 on http://127.0.0.1:8787
 
 $ devmind index .
 ✓ shop: 214 indexed, 0 unchanged, 0 removed, 3120 chunks, 2680 symbols in 8.3s - complete
@@ -43,6 +43,12 @@ $ devmind ask --repo . "why does refund_order double-charge retried orders?"
 | **Local & private** | Loopback HTTP, one SQLite file, encrypted GitHub token, secret redaction before storage. |
 | **Fast** | Worker-friendly limits, resumable indexing with hard time caps, small-model routing, streamed tokens. |
 | **Focus** | Task + language detection for Python, JS/TS, Java, C/C++, C#, Go, Rust, PHP, Kotlin, Swift, SQL, Bash and more. |
+
+## Windows, PowerShell, no `winget`?
+
+See [docs/windows.md](docs/windows.md) — folder, `.\devmind.bat`, installing Ollama without
+`winget`, size-by-RAM model choices, Apache/XAMPP on 8080, and the commands that do *not* work
+(`devmind`, `curl`, `cd findy_ai` twice).
 
 ## Two machines, one brain
 

@@ -77,12 +77,21 @@ def build_plan(
         has_ollama = shutil.which("ollama") is not None
 
     if kind == "ollama":
+        ollama = by_port.get(OLLAMA_PORT)
+        if ollama is not None and ollama.usable:
+            notes.append(f"Ollama is answering on 11434: {ollama.detail}")
+        else:
+            notes.append(
+                "Ollama is not answering on 11434 yet. Install it, start it (it sits in the "
+                "tray), then run `ollama pull qwen2.5-coder:7b`."
+            )
+        notes.append("keep Ollama running in the background while you use DevMind")
         return SetupPlan(
             kind="ollama",
             port=OLLAMA_PORT,
             base_url=config.ollama.base_url,
             start_command="ollama serve",
-            notes=["Ollama is a separate app; keep it running in the background"],
+            notes=notes,
         )
 
     usable = next((report for report in reports if report.usable), None)
