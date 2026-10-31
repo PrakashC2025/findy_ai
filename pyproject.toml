@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devmind"
+version = "0.1.0"
+description = "DevMind — a free, local-first coding assistant that learns your codebase."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "DevMind contributors" }]
+keywords = ["ai", "coding-assistant", "local-first", "ollama", "privacy"]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Code Generators",
+]
+dependencies = [
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+dev = ["pytest>=8", "fastapi>=0.110", "uvicorn[standard]>=0.29", "ruff>=0.5"]
+
+[project.scripts]
+devmind = "devmind.cli:main"
+
+[tool.setuptools]
+packages = ["devmind", "devmind.memory"]
+
+[tool.setuptools.package-data]
+devmind = ["models.toml", "web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["devmind", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RUF"]
+# Long single-line prompt strings and reason messages are clearer unbroken.
+ignore = ["E501"]

@@ -1,0 +1,255 @@
+# DevMind model registry
+#
+# Every entry is a free / open-weight model that runs locally through Ollama.
+# `size_gb` is the approximate download size of the default quantisation.
+# `training_ok` records whether the license clearly permits fine-tuning on your
+# data; non-OSI community licenses are marked false so DevMind never silently
+# trains on them (see docs/models.md).
+#
+# Override or extend this file by copying it to ~/.devmind/models.toml.
+# A user file is merged by `id`: same id replaces, new ids are appended.
+
+[meta]
+schema = 1
+updated = "2025-10"
+
+# ---------------------------------------------------------------- coder models
+
+[[models]]
+id = "qwen2.5-coder:0.5b"
+family = "Qwen2.5-Coder"
+params_b = 0.5
+quant = "q4_K_M"
+size_gb = 0.4
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["fast-small", "draft"]
+quality = 45
+strengths = ["inline completion", "tiny footprint"]
+
+[[models]]
+id = "qwen2.5-coder:1.5b"
+family = "Qwen2.5-Coder"
+params_b = 1.5
+quant = "q4_K_M"
+size_gb = 1.0
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["fast-small", "draft"]
+quality = 58
+strengths = ["autocomplete", "quick edits", "CPU friendly"]
+
+[[models]]
+id = "qwen2.5-coder:3b"
+family = "Qwen2.5-Coder"
+params_b = 3.0
+quant = "q4_K_M"
+size_gb = 1.9
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["fast-small"]
+quality = 66
+strengths = ["autocomplete", "small refactors"]
+
+[[models]]
+id = "qwen2.5-coder:7b"
+family = "Qwen2.5-Coder"
+params_b = 7.0
+quant = "q4_K_M"
+size_gb = 4.7
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["fast-small", "strong-coder"]
+quality = 78
+strengths = ["everyday coding", "tests", "the default for 8 GB machines"]
+
+[[models]]
+id = "qwen2.5-coder:14b"
+family = "Qwen2.5-Coder"
+params_b = 14.0
+quant = "q4_K_M"
+size_gb = 9.0
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["strong-coder", "judge"]
+quality = 86
+strengths = ["multi-file reasoning", "refactors", "best all-round 16 GB pick"]
+
+[[models]]
+id = "qwen2.5-coder:32b"
+family = "Qwen2.5-Coder"
+params_b = 32.0
+quant = "q4_K_M"
+size_gb = 20.0
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["strong-coder", "judge"]
+quality = 92
+strengths = ["hard debugging", "architecture", "needs 24 GB+ VRAM"]
+
+[[models]]
+id = "deepseek-coder-v2:16b"
+family = "DeepSeek-Coder-V2"
+params_b = 16.0
+quant = "q4_K_M"
+size_gb = 8.9
+context = 16384
+license = "DeepSeek-License"
+training_ok = true
+roles = ["strong-coder"]
+quality = 88
+strengths = ["algorithmic problems", "long-context code reading"]
+
+[[models]]
+id = "codestral:22b"
+family = "Codestral"
+params_b = 22.0
+quant = "q4_K_M"
+size_gb = 12.9
+context = 32768
+license = "MNPL (non-commercial)"
+training_ok = false
+roles = ["strong-coder"]
+quality = 90
+strengths = ["fill-in-the-middle", "Python/JS/TS"]
+notes = "Non-commercial license: fine to run, not to fine-tune."
+
+[[models]]
+id = "starcoder2:15b"
+family = "StarCoder2"
+params_b = 15.0
+quant = "q4_K_M"
+size_gb = 9.1
+context = 16384
+license = "BigCode-OpenRAIL-M"
+training_ok = false
+roles = ["strong-coder"]
+quality = 80
+strengths = ["many languages", "completion"]
+
+[[models]]
+id = "granite-code:8b"
+family = "Granite Code"
+params_b = 8.0
+quant = "q4_K_M"
+size_gb = 4.9
+context = 16384
+license = "Apache-2.0"
+training_ok = true
+roles = ["strong-coder"]
+quality = 72
+strengths = ["enterprise languages", "SQL", "Java"]
+
+[[models]]
+id = "granite-code:20b"
+family = "Granite Code"
+params_b = 20.0
+quant = "q4_K_M"
+size_gb = 12.0
+context = 16384
+license = "Apache-2.0"
+training_ok = true
+roles = ["strong-coder"]
+quality = 82
+strengths = ["SQL", "COBOL/legacy", "Java"]
+
+# ------------------------------------------------------- general / reasoning
+
+[[models]]
+id = "llama3.2:3b"
+family = "Llama 3.2"
+params_b = 3.0
+quant = "q4_K_M"
+size_gb = 2.0
+context = 32768
+license = "Llama-3.2-Community"
+training_ok = false
+roles = ["fast-small", "reasoning"]
+quality = 62
+strengths = ["quick answers", "explanations"]
+
+[[models]]
+id = "llama3.1:8b"
+family = "Llama 3.1"
+params_b = 8.0
+quant = "q4_K_M"
+size_gb = 4.7
+context = 32768
+license = "Llama-3.1-Community"
+training_ok = false
+roles = ["reasoning", "judge"]
+quality = 70
+strengths = ["architecture discussion", "docs"]
+
+[[models]]
+id = "qwen2.5:14b"
+family = "Qwen2.5"
+params_b = 14.0
+quant = "q4_K_M"
+size_gb = 9.0
+context = 32768
+license = "Apache-2.0"
+training_ok = true
+roles = ["reasoning", "judge"]
+quality = 84
+strengths = ["architecture", "trade-off analysis", "judging answers"]
+
+[[models]]
+id = "gemma2:9b"
+family = "Gemma 2"
+params_b = 9.0
+quant = "q4_K_M"
+size_gb = 5.5
+context = 8192
+license = "Gemma-Terms"
+training_ok = false
+roles = ["reasoning"]
+quality = 74
+strengths = ["explanations", "docs"]
+
+[[models]]
+id = "phi4:14b"
+family = "Phi-4"
+params_b = 14.0
+quant = "q4_K_M"
+size_gb = 9.1
+context = 16384
+license = "MIT"
+training_ok = true
+roles = ["reasoning", "judge"]
+quality = 83
+strengths = ["math", "step-by-step reasoning"]
+
+# ------------------------------------------------------------- embeddings
+
+[[models]]
+id = "nomic-embed-text"
+family = "Nomic Embed Text"
+params_b = 0.14
+quant = "f16"
+size_gb = 0.27
+context = 8192
+license = "Apache-2.0"
+training_ok = true
+roles = ["embed"]
+quality = 70
+strengths = ["code + prose embeddings", "small"]
+
+[[models]]
+id = "bge-m3"
+family = "BGE-M3"
+params_b = 0.57
+quant = "f16"
+size_gb = 1.2
+context = 8192
+license = "MIT"
+training_ok = true
+roles = ["embed"]
+quality = 76
+strengths = ["multilingual", "dense + sparse retrieval"]
