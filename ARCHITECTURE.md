@@ -198,7 +198,7 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 
 ## 10. Testing strategy
 
-* 189 tests in ~5 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
+* 190 tests in ~5 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
   incremental/resumable indexing, retrieval gating, prompts, redaction, backends (MockTransport),
   GitHub flows (local bare repo + mocked API), verification (local + fake Actions), CLI paths.
 * Step-3 tests are behavioural, not mock-heavy: the sandbox is checked by actually hitting a timeout,

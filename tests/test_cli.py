@@ -263,3 +263,12 @@ def test_fix_demo_mode_refuses_to_pretend(tmp_home: Path, tmp_path: Path, capsys
     assert "demo mode has no model" in captured.out + captured.err
     # Nothing was written to the project.
     assert (project / "pkg" / "billing.py").read_text().count("refund_order") == 1
+
+
+def test_ask_injects_language_pack_guidance(tmp_home: Path, tmp_path: Path, capsys) -> None:
+    project = write_project(tmp_path / "shop")
+    (project / "pyproject.toml").write_text("[project]\nname='shop'\nversion='0.1.0'\n")
+    assert run(tmp_home, "ask", "--json", "--repo", str(project), "add a refund guard") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["language_packs"] == ["python"]
+    assert payload["memory"]["code_hits"]

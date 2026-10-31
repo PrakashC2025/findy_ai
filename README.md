@@ -19,7 +19,7 @@ $ devmind ask --repo . "why does refund_order double-charge retried orders?"
 <streamed answer citing services/billing/refund.py:41-67>
 ```
 
-> **Status: steps 1-3 complete, 189 tests.** Backend abstraction, llama.cpp + Ollama + demo
+> **Status: steps 1-3 complete, 190 tests.** Backend abstraction, llama.cpp + Ollama + demo
 > backends, portable SQLite schema, incremental code indexer, cited retrieval, GitHub module
 > (device login, encrypted token, clone/branch/PR), a limit-enforcing sandbox, a security scanner,
 > a self-repair loop that only accepts patches the project's own checks pass, language packs and a
@@ -199,7 +199,7 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 |---|---|---|
 | 1 | Config, hardware detection, registry, router, Ollama, CLI, memory | **Done** |
 | 2 | Backend interface + llama.cpp, portable SQLite schema, indexer, cited retrieval, GitHub, verification | **Done, 130 tests** |
-| 3 | Sandbox (limits, scrubbed env, optional netns), security scan, self-repair loop, confidence, language packs | **Done, 189 tests** |
+| 3 | Sandbox (limits, scrubbed env, optional netns), security scan, self-repair loop, confidence, language packs | **Done, 190 tests** |
 | 4 | Difficulty classifier + reasoning pipeline; ensemble + judge | Difficulty done; ensemble/judge not started |
 | 5 | Web knowledge layer (cache, version detection, injection defence) | Not started |
 | 6 | Feedback capture + LoRA with auto-rollback | Feedback storage done; training not started |
@@ -238,7 +238,7 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 
 ```bash
 make install    # editable install + dev extras
-make test       # 189 tests
+make test       # 190 tests
 make lint       # ruff check + format check
 make demo       # doctor + models + a routed demo answer, no model needed
 ```
@@ -266,7 +266,7 @@ devmind/
   difficulty.py     trivial/normal/hard classifier with time budgets
   languages.py      language packs (commands, docs, notes, pitfalls)
   storage/schema.sql  portable schema shared with the PWA
-tests/              189 tests · docs/ · ARCHITECTURE.md
+tests/              190 tests · docs/ · ARCHITECTURE.md
 ```
 
 ## License

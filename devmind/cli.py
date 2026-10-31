@@ -39,7 +39,7 @@ from .github import (
 )
 from .hardware import Hardware
 from .indexer import CodeIndexer
-from .languages import detect_languages, project_packs
+from .languages import detect_languages, project_packs, style_block
 from .memory.retriever import Retriever
 from .memory.store import MemoryStore
 from .prompts import build_messages
@@ -118,6 +118,7 @@ class Context:
         self._backend: Any = None
         self._installed: set[str] | None = None
         self._ollama_note = ""
+        self._style: dict[str, tuple[str, list[str]]] = {}
 
     def _load_registry(self) -> Registry:
         registry = Registry.load(self.config.registry_override_path)
@@ -215,6 +216,28 @@ class Context:
             if cwd == root_path or root_path in cwd.parents:
                 return repo["repo"]
         return None
+
+    def repo_root(self, repo: str | None) -> Path | None:
+        """Where an indexed repository lives, if it still exists."""
+        if not repo:
+            return None
+        for entry in self.store.list_repos():
+            if entry.get("repo") == repo and entry.get("root"):
+                root = Path(entry["root"])
+                if root.is_dir():
+                    return root
+        return None
+
+    def style_for(self, repo: str | None) -> tuple[str, list[str]]:
+        """Language-pack guidance for the project, cached per repository."""
+        root = self.repo_root(repo)
+        if root is None:
+            return "", []
+        key = str(root)
+        if key not in self._style:
+            packs = project_packs(root)
+            self._style[key] = (style_block(root), [pack.id for pack in packs])
+        return self._style[key]
 
     def router(self, installed: set[str] | None = None) -> Router:
         return Router(
@@ -530,12 +553,14 @@ async def _answer(
     if captured and not json_output:
         info(f"learned {len(captured)} preference(s) — `devmind memory` to review")
 
+    style, pack_ids = ctx.style_for(repo)
     messages = build_messages(
         prompt,
         profile=profile,
         context=context,
         config=config.models,
         history=history,
+        extra_system=style,
     )
     options = {
         "temperature": config.models.temperature,
@@ -618,6 +643,7 @@ async def _answer(
         "difficulty": difficulty.to_dict(),
         "route": decision.to_dict(),
         "memory": context.to_dict(),
+        "language_packs": pack_ids,
         "learned": captured,
         "timings": {
             "first_token_ms": round(first_token_ms or 0, 1),
