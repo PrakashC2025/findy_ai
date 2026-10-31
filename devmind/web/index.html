@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b0f14" />
+<meta name="description" content="DevMind - your local, free coding assistant." />
+<title>DevMind</title>
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 3a5 5 0 0 0-5 5v.6A4 4 0 0 0 5 12a4 4 0 0 0 2 3.4V16a5 5 0 0 0 10 0v-.6A4 4 0 0 0 19 12a4 4 0 0 0-2-3.4V8a5 5 0 0 0-5-5Z" stroke="url(#g)" stroke-width="1.6"/>
+      <path d="M9 10h6M9 14h4" stroke="#4fd1c5" stroke-width="1.6" stroke-linecap="round"/>
+      <defs><linearGradient id="g" x1="5" y1="3" x2="19" y2="21"><stop stop-color="#4fd1c5"/><stop offset="1" stop-color="#7aa2ff"/></linearGradient></defs>
+    </svg>
+    <span>DevMind</span>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill" id="status-pill">connecting…</span>
+  <button class="ghost" id="install-btn" hidden>Install</button>
+</header>
+
+<main>
+  <section class="project-bar" aria-label="project">
+    <select id="repo-select" title="indexed projects">
+      <option value="">no project</option>
+    </select>
+    <input id="path-input" placeholder="/path/to/project (on the machine running DevMind)" />
+    <button class="ghost" id="open-btn">Open folder</button>
+    <button class="ghost" id="refresh-btn" title="refresh projects">↻</button>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-ask" aria-selected="true" aria-controls="panel-ask">Ask</button>
+    <button role="tab" id="tab-analyze" aria-selected="false" aria-controls="panel-analyze">Analyze</button>
+    <button role="tab" id="tab-fix" aria-selected="false" aria-controls="panel-fix">Fix</button>
+  </nav>
+
+  <section class="panel active" id="panel-ask" role="tabpanel">
+    <div class="messages" id="messages">
+      <article class="msg">
+        <div class="meta">DevMind · local · free</div>
+        <div class="body" id="welcome">Ask about your project, paste an error, or describe the change you want.
+Pick a project above so answers can cite real files with <code>file:line</code>.</div>
+      </article>
+    </div>
+    <div class="composer">
+      <textarea id="prompt" rows="2" placeholder="e.g. why does the refund test fail?"></textarea>
+      <button class="primary" id="send-btn">Send</button>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-analyze" role="tabpanel">
+    <div class="card">
+      <h3>Project files</h3>
+      <div class="row" style="margin-bottom:8px">
+        <button class="ghost" id="files-btn">List indexed files</button>
+        <span class="hint" id="files-hint"></span>
+      </div>
+      <div class="file-list" id="file-list"></div>
+      <pre class="file" id="file-preview" hidden></pre>
+    </div>
+    <div class="card">
+      <h3>Checks and security</h3>
+      <div class="row" style="margin-bottom:8px">
+        <button class="ghost" id="checks-btn">Run checks</button>
+        <span class="hint" id="checks-hint">runs the project's own tests/lint under CPU and memory limits</span>
+      </div>
+      <div id="checks-out"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-fix" role="tabpanel">
+    <div class="card">
+      <h3>Fix a problem</h3>
+      <textarea id="fix-problem" rows="3" placeholder="e.g. total() subtracts instead of adding; tests fail"
+        style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit"></textarea>
+      <div class="row" style="margin-top:10px">
+        <label class="hint">rounds <input type="number" id="fix-rounds" value="3" min="1" max="5" /></label>
+        <button class="primary" id="fix-btn">Propose fix</button>
+        <button class="ghost" id="fix-apply-btn">Propose and apply if verified</button>
+      </div>
+      <p class="hint">Patches are applied to a throwaway copy, checked, and security-scanned first. Nothing touches
+        your files unless you choose “apply”, and the checks then re-run on the real tree.</p>
+      <div id="fix-out"></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

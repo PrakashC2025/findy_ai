@@ -154,6 +154,18 @@ class IndexConfig:
 
 
 @dataclass
+class PipelineConfig:
+    """Quality/speed trade-offs for the answer pipeline (step 4)."""
+
+    cache: bool = True
+    cache_threshold: float = 0.92  # cosine similarity for a cache hit
+    max_candidates: int = 3  # self-consistency samples on hard tasks
+    plan_hard_tasks: bool = True  # short plan before solving
+    judge_tie_break: bool = True  # ask the judge only when scores tie
+    min_confidence_to_cache: float = 0.35  # below this an answer is not reused
+
+
+@dataclass
 class GitHubConfig:
     """GitHub access. Login is your own account; there is no paid API key."""
 
@@ -181,6 +193,7 @@ class Config:
     router: RouterConfig = field(default_factory=RouterConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     index: IndexConfig = field(default_factory=IndexConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     offline: bool = False

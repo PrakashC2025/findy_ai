@@ -585,6 +585,38 @@ async def _answer(
         else ""
     )
 
+    cached_entry = (
+        ctx.store.cache_lookup(prompt, repo=repo or "", threshold=config.pipeline.cache_threshold)
+        if config.pipeline.cache
+        else None
+    )
+    if cached_entry is not None:
+        answer = str(cached_entry["answer"])
+        confidence = assess(
+            answer, sources=len(context.citations), demo=isinstance(ctx.backend, DemoBackend)
+        )
+        if not json_output:
+            info(f"cache hit (similarity {cached_entry['similarity']:.2f}) — no model call")
+            print(answer)
+        ctx.store.record_episode(session, "assistant", answer, {"cached": True})
+        result = {
+            "prompt": prompt,
+            "answer": answer,
+            "confidence": confidence.to_dict(),
+            "difficulty": difficulty.to_dict(),
+            "route": decision.to_dict(),
+            "memory": context.to_dict(),
+            "language_packs": pack_ids,
+            "learned": captured,
+            "cached": True,
+            "timings": {"first_token_ms": 0.0, "total_ms": 0.0},
+            "error": None,
+            "demo": isinstance(ctx.backend, DemoBackend),
+        }
+        if json_output:
+            print(json.dumps(result, indent=2))
+        return result
+
     started = time.perf_counter()
     first_token_ms: float | None = None
     pieces: list[str] = []
@@ -636,9 +668,19 @@ async def _answer(
         check_results=[],
         demo=isinstance(ctx.backend, DemoBackend),
     )
+    if config.pipeline.cache and confidence.score >= config.pipeline.min_confidence_to_cache:
+        ctx.store.cache_put(
+            prompt,
+            answer=answer,
+            model=decision.model.id,
+            repo=repo or "",
+            citations=context.citations,
+            confidence=confidence.score,
+        )
     result = {
         "prompt": prompt,
         "answer": answer,
+        "cached": False,
         "confidence": confidence.to_dict(),
         "difficulty": difficulty.to_dict(),
         "route": decision.to_dict(),
@@ -874,6 +916,24 @@ def cmd_config(args: argparse.Namespace) -> int:
         )
     asyncio.run(ctx.aclose())
     return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from .server import serve
+
+    try:
+        return serve(
+            home=args.home,
+            host=args.host,
+            port=args.port,
+            token=args.token,
+            open_browser=args.open,
+            demo=args.demo,
+            allow_roots=args.allow or None,
+        )
+    except OSError as exc:
+        fail(f"could not start the server: {exc}")
+        return 1
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -1622,6 +1682,22 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--timeout", type=float, default=900)
     verify.add_argument("--json", action="store_true")
     verify.set_defaults(func=cmd_verify)
+
+    serve_parser = sub.add_parser(
+        "serve", help="run the local web app (PC + phone, same Wi-Fi)", parents=[common]
+    )
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="0.0.0.0 to reach it from your phone"
+    )
+    serve_parser.add_argument("--port", type=int, default=8787)
+    serve_parser.add_argument(
+        "--token", default="", help="required when binding a network interface"
+    )
+    serve_parser.add_argument(
+        "--allow", action="append", default=[], help="extra directory the web app may open"
+    )
+    serve_parser.add_argument("--open", action="store_true", help="open the browser")
+    serve_parser.set_defaults(func=cmd_serve)
 
     stats = sub.add_parser(
         "stats", help="memory stats and recent routing decisions", parents=[common]

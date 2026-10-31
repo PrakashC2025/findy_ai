@@ -1,4 +1,4 @@
-.PHONY: help install test lint fmt demo doctor clean
+.PHONY: help install web test lint fmt demo doctor clean
 
 PY ?= .venv/bin/python
 VENV ?= .venv
@@ -7,6 +7,7 @@ help:
 	@echo "make install   create .venv and install DevMind (editable) + dev deps"
 	@echo "make test      run the test suite"
 	@echo "make lint      ruff check (if installed)"
+	@echo "make web       serve the web app and open the browser"
 	@echo "make demo      offline demo: doctor, models, a routed answer"
 	@echo "make clean     remove caches"
 
@@ -17,6 +18,9 @@ $(VENV)/bin/python:
 install: $(VENV)/bin/python
 	$(VENV)/bin/pip install --quiet -e ".[dev]"
 	@echo "Installed. Try: $(VENV)/bin/devmind doctor"
+
+web:
+	$(PY) -m devmind serve --open
 
 test: install
 	$(PY) -m pytest

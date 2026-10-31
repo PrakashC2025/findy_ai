@@ -22,6 +22,9 @@ do today, what it will ask about, and what it deliberately refuses.
 | Cloning a private repo | `devmind github clone`, using your own token |
 | Pushing a branch / opening a PR | `devmind github pr` — refuses `main`/`master`/`trunk`/`develop` and the default branch |
 | Reading CI results | `devmind verify --github` |
+| Exposing the web app to your network | `devmind serve --host 0.0.0.0` requires a token; the server refuses a non-loopback bind without one |
+| Indexing a folder through the web app | the path must sit under an allowed root (`--allow`, cwd, `$HOME`, `$DEVMIND_HOME`); anything else is `403` |
+| Opening a file in the web app | repo membership plus a resolved-path containment check; traversal attempts are `400` |
 | Signing in to GitHub | device flow (browser) or a fine-grained token you paste |
 | Anything network beyond the above | nothing exists yet; the web layer (step 5) will be opt-in with a local cache |
 
@@ -31,7 +34,8 @@ do today, what it will ask about, and what it deliberately refuses.
 * Install packages, change your shell profile, or edit files outside the project root.
 * Write to the default branch of any repository.
 * Send your code, prompts or memory to a cloud API. There is no paid-API code path.
-* Start background services, download models, or reach the network while you are offline
+* Start remote services: `devmind serve` is local, and the phone connects *to* it, never the reverse
+* Download models, or reach the network while you are offline
   (`offline = true` blocks every outbound call).
 * Watch your screen, keyboard or other apps.
 

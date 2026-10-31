@@ -9,6 +9,9 @@ open a pull request on your own private repo for you to approve. No API keys. No
 No telemetry.
 
 ```
+$ devmind serve --open           # or double-click scripts/devmind.command / .bat
+DevMind 0.4.0 on http://127.0.0.1:8787
+
 $ devmind index .
 ✓ shop: 214 indexed, 0 unchanged, 0 removed, 3120 chunks, 2680 symbols in 8.3s - complete
 
@@ -19,12 +22,14 @@ $ devmind ask --repo . "why does refund_order double-charge retried orders?"
 <streamed answer citing services/billing/refund.py:41-67>
 ```
 
-> **Status: steps 1-3 complete, 190 tests.** Backend abstraction, llama.cpp + Ollama + demo
+> **Status: steps 1-4 complete (step 4 in progress), 214 tests.** Backend abstraction, llama.cpp + Ollama + demo
 > backends, portable SQLite schema, incremental code indexer, cited retrieval, GitHub module
 > (device login, encrypted token, clone/branch/PR), a limit-enforcing sandbox, a security scanner,
 > a self-repair loop that only accepts patches the project's own checks pass, language packs and a
-> confidence score built from evidence. The PWA, ensemble judge, web grounding, fine-tuning, Drive
-> backup and the evaluation suite are **not built yet** — see the roadmap and "What is real today".
+> confidence score built from evidence, a semantic answer cache, a difficulty-aware two-tier pipeline
+> with self-consistency sampling, and a local web app for PC and phone (PWA-installable).
+> Web grounding, LoRA fine-tuning, Drive backup, on-device WebLLM and the evaluation suite are
+> **not built yet** — see the roadmap and "What is real today".
 
 ---
 
@@ -103,6 +108,22 @@ No backend yet? Every command still works; answers are clearly labelled demo out
 devmind --demo ask "explain this traceback"
 ```
 
+## Use it like an app (PC and phone)
+
+```bash
+devmind serve --open                  # laptop: http://127.0.0.1:8787
+devmind serve --host 0.0.0.0          # phone on the same Wi-Fi; prints a token URL
+```
+
+Or double-click `scripts/devmind.command` (macOS), `scripts/devmind.bat` (Windows) or
+`scripts/devmind.sh` (Linux) — each starts the server and opens the browser.
+
+The same UI works on both: streamed answers with citations and confidence, a project picker that
+indexes any folder on the PC, **Analyze** (files, checks, security scan) and **Fix** (propose a diff,
+verify it on a copy, apply only when it passes). On the phone, open the printed URL once and choose
+*Add to Home Screen* — the manifest and service worker are included. See
+[docs/web.md](docs/web.md) for phone setup, tunnels and the HTTP API.
+
 ## Commands
 
 | Command | What it does |
@@ -114,6 +135,7 @@ devmind --demo ask "explain this traceback"
 | `devmind index [PATH] [--force] [--json]` | Incremental, resumable code index |
 | `devmind search "…" [--repo R] [-k N]` | Code search with `file:line` |
 | `devmind repos` | Indexed repositories and sizes |
+| `devmind serve [--host 0.0.0.0] [--open]` | Local web app for PC and phone (PWA) |
 | `devmind check [PATH]` | Run tests/lint/build under CPU/memory/time limits + security scan |
 | `devmind fix "…" [--apply]` | Ask for a unified diff, verify it on a copy, retry up to 3 rounds |
 | `devmind scan [PATH]` | Security scan (secrets, injection, unsafe deserialisation, XSS) |
@@ -199,20 +221,19 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 |---|---|---|
 | 1 | Config, hardware detection, registry, router, Ollama, CLI, memory | **Done** |
 | 2 | Backend interface + llama.cpp, portable SQLite schema, indexer, cited retrieval, GitHub, verification | **Done, 130 tests** |
-| 3 | Sandbox (limits, scrubbed env, optional netns), security scan, self-repair loop, confidence, language packs | **Done, 190 tests** |
-| 4 | Difficulty classifier + reasoning pipeline; ensemble + judge | Difficulty done; ensemble/judge not started |
+| 3 | Sandbox (limits, scrubbed env, optional netns), security scan, self-repair loop, confidence, language packs | **Done** |
+| 4 | Semantic cache, two-tier answer, plan-then-solve, 2-3 samples scored by checks, judge for ties | **Done for the web app + CLI cache; measure next** |
+| 8 | Local web UI + PWA (installable, phone-friendly), phone ↔ PC | **Partially done**: web app + PWA shell; on-device WebLLM and the OpenAI-compatible endpoint are not |
 | 5 | Web knowledge layer (cache, version detection, injection defence) | Not started |
 | 6 | Feedback capture + LoRA with auto-rollback | Feedback storage done; training not started |
 | 7 | Google Drive backend with encryption | Not started |
-| 8 | PWA + local API (on-device WebLLM backend, workers, offline) | Not started |
 | 9 | Evaluation suite (100+ tasks, regression gate) | Not started |
 | 10 | Docs | Started (`docs/`) |
 
 ### Honest deviations
 
-* **PWA not built yet.** Step 2 ships the groundwork it needs: a backend-agnostic core and a
-  portable SQLite schema (`devmind/storage/schema.sql`) with no WAL/FTS5 hard dependency. The
-  browser app is step 8.
+* **The PWA is a web app, not a native app.** It installs to the home screen via the manifest, but it
+  still needs the PC's server for answers. On-device inference in the browser is step 8.
 * **On-device inference is a contract, not code.** The `Backend` protocol includes it; the
   WebLLM/wllama implementation lives in the PWA (JavaScript), so there is nothing to fake in Python.
 * **`models.toml` instead of YAML**: `tomllib` is stdlib. Same schema semantics.
@@ -225,9 +246,13 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
   recorded as "no diff" instead of being retried forever. Demo mode refuses to propose patches.
 * **The security scanner is ~20 regex rules.** Useful, explainable, and false-positive-prone by
   design; it does not replace a real SAST tool. High-severity findings block an automatic patch.
-* **No ensemble, judge, two-tier answering or reasoning pipeline yet.** One model answers; the
-  difficulty classifier and confidence score exist, but sampling 3 candidates and judging them is
-  step 4.
+* **The ensemble is same-model sampling on a llama.cpp server.** A llama.cpp server serves one GGUF,
+  so "3 candidates" means three samples at different temperatures, not three different models. With
+  Ollama, distinct fast/strong/judge models are used when they are installed.
+* **The CLI streams one answer.** The cache is used by `devmind ask`; plan/sampling/judge run behind
+  the web app (and are tested directly). Wiring `--deep` into the CLI is next.
+* **The PWA has no on-device model.** It caches its shell offline, but answers come from the PC.
+  WebLLM/wllama in a worker is still step 8.
 * **No web grounding yet** (step 5), so "current" library behaviour is answered from the model and
   the project only — and the prompt says so.
 * **No system control.** DevMind runs the checks a project defines and writes a verified diff when you
@@ -238,7 +263,7 @@ tunnel) and the GitHub API when you ask for it. Token storage is encrypted; memo
 
 ```bash
 make install    # editable install + dev extras
-make test       # 190 tests
+make test       # 214 tests
 make lint       # ruff check + format check
 make demo       # doctor + models + a routed demo answer, no model needed
 ```
@@ -265,8 +290,11 @@ devmind/
   confidence.py     evidence-based confidence scoring
   difficulty.py     trivial/normal/hard classifier with time budgets
   languages.py      language packs (commands, docs, notes, pitfalls)
+  pipeline.py       semantic cache, quick answer, plan, sampled candidates, judge
+  server.py         FastAPI app + SSE + PWA assets (devmind serve)
+  web/              index.html, app.css, app.js, manifest, service worker
   storage/schema.sql  portable schema shared with the PWA
-tests/              190 tests · docs/ · ARCHITECTURE.md
+tests/              214 tests · docs/ · ARCHITECTURE.md
 ```
 
 ## License

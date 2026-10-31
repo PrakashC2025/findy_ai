@@ -126,3 +126,20 @@ CREATE TABLE IF NOT EXISTS index_state (
     updated_at REAL NOT NULL,
     complete INTEGER NOT NULL DEFAULT 0
 );
+
+-- Semantic answer cache: reuses an answer for a near-identical question.
+-- SQLite-WASM friendly: TEXT id, REAL timestamps, no server-only features.
+CREATE TABLE IF NOT EXISTS answer_cache (
+    id TEXT PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    repo TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    citations TEXT NOT NULL DEFAULT '[]',
+    confidence REAL NOT NULL DEFAULT 0,
+    embedding BLOB NOT NULL,
+    created_at REAL NOT NULL,
+    hits INTEGER NOT NULL DEFAULT 0,
+    last_hit REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_answer_cache_repo ON answer_cache(repo);

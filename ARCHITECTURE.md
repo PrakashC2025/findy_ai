@@ -41,7 +41,15 @@ general chat assistant.
                         │  (diff apply on a copy, ≤3 rounds) →      │
                         │  confidence.py · difficulty.py ·          │
                         │  languages.py (packs, commands, docs)     │
+                        │  pipeline.py (cache → quick → plan →      │
+                        │  samples → judge)                         │
                         └─────────────────┬─────────────────────────┘
+                                          │
+                              ┌───────────▼────────────────┐
+                              │ server.py (devmind serve)  │
+                              │  FastAPI · SSE · token     │
+                              │  web/ (PWA: phone + PC)    │
+                              └────────────────────────────┘
                                           │        │
                               ┌───────────▼────────▼───────┐
                               │ memory/store.py            │
@@ -73,6 +81,19 @@ general chat assistant.
 8. Record the episode and routing decision.
 9. Score the answer with `confidence.assess()` from the citations and any executed checks, and show
    the reasons (never a model self-report).
+
+## 3a. Answer pipeline (`/api/ask`, `devmind ask`)
+
+1. **Cache** – cosine similarity over hashing embeddings, scoped per repository; above
+   `pipeline.cache_threshold` (0.92) the stored answer is returned with zero model calls.
+2. **Quick answer** – the fast model streams tokens immediately (UI shows text in ~1 s).
+3. **Plan** (hard only) – at most five numbered steps from the strong/reasoning model; hidden unless
+   asked, and used to guide the samples.
+4. **Candidates** (hard only) – 2-3 samples at increasing temperature and different seeds.
+5. **Score, never concatenate** – citations, files that exist in the context, parseable Python,
+   balanced brackets, security scan of code blocks, an explicit verification step. Unknown file paths
+   are penalised hard; the best score wins, the judge model is consulted only for an exact tie.
+6. **Confidence** – evidence-based score stored with the answer; cached answers keep theirs.
 
 ## 3b. Repair lifecycle (`devmind fix "…"`)
 
@@ -181,30 +202,34 @@ FTS5 (`memory_fts`, `code_fts`) is created opportunistically; without it retriev
 
 * **Step 3 - done.** `sandbox.py`, `security_scan.py`, `repair.py`, `confidence.py`, `difficulty.py`,
   `languages.py`; `devmind check|fix|scan|languages`.
-* **Step 4 - in progress.** Difficulty classification is live (it gates repair/verify budgets); the
-  ensemble (2-3 candidates on hard tasks, scored by checks, judge only for ties, never concatenation),
-  two-tier quick-then-strong answering and the reasoning pipeline are next.
+* **Step 4 - done for the web app, measuring next.** Semantic cache, quick answer, plan-then-solve,
+  2-3 scored samples and a tie-break judge are implemented in `pipeline.py` and used by
+  `/api/ask`; `devmind ask` uses the cache today, `--deep` is next. Calibration against the
+  evaluation suite (step 9) is still missing, so "better" is a design claim, not a measured one.
 * **Step 5 - web knowledge.** Cached official docs, version detection from manifests, provenance,
   prompt-injection defences.
 * **Step 6 - feedback + LoRA.** Accept/edit/reject capture, dataset export, QLoRA when idle,
   adapter registry with evaluation and rollback.
 * **Step 7 - Drive + encryption.** OAuth, app-data folder, encrypted snapshots, passphrase-derived
   keys for memory (not only the GitHub token).
-* **Step 8 - PWA + API.** FastAPI on loopback, SSE, service worker, WebLLM/wllama in a worker,
-  OpenAI-compatible endpoint for editors, VS Code extension.
+* **Step 8 - PWA + API.** Partially shipped: FastAPI on loopback, SSE, installable PWA, token auth,
+  phone-friendly UI. Still missing: WebLLM/wllama in a worker, OpenAI-compatible endpoint for editors,
+  VS Code extension.
 * **Step 9 - evaluation.** 100+ tasks (HumanEval/MBPP-style + repo tasks), pass rate,
   hallucinated-symbol rate, latency, RSS; CI regression gate.
 * **Step 10 - docs** grow with each step.
 
 ## 10. Testing strategy
 
-* 190 tests in ~5 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
+* 214 tests in ~7 s: config, hardware budgeting, registry overrides, routing maths, chunkers,
   incremental/resumable indexing, retrieval gating, prompts, redaction, backends (MockTransport),
   GitHub flows (local bare repo + mocked API), verification (local + fake Actions), CLI paths.
 * Step-3 tests are behavioural, not mock-heavy: the sandbox is checked by actually hitting a timeout,
   a memory cap and an env scrub; repair is checked by applying real diffs to real failing projects
   (including a security-blocked patch and a two-round recovery); the scanner is checked against
   deliberate vulnerabilities and false positives.
+* The web app is tested through `httpx.ASGITransport`: token enforcement, allowed roots, traversal
+  refusal, SSE event order, checks on a real project, and the demo-mode repair guard.
 * Failure paths are first-class: unreachable servers, unknown models, wrong passphrase, protected
   branches, timeouts, empty checks.
 * `ruff check` + `ruff format --check` are clean; both are part of `make lint`.

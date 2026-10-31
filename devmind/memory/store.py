@@ -26,6 +26,7 @@ import math
 import os
 import sqlite3
 import threading
+import uuid
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -249,6 +250,110 @@ class MemoryStore:
         sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return [self._row_to_memory(row) for row in self._connection().execute(sql, params)]
+
+    def repo_files(self, repo: str, *, limit: int = 3000) -> list[str]:
+        """Indexed paths for a repository, for the web UI's file browser."""
+        connection = self._connection()
+        with self._lock:
+            rows = connection.execute(
+                "SELECT path FROM code_files WHERE repo=? ORDER BY path LIMIT ?", (repo, limit)
+            ).fetchall()
+        return [row["path"] for row in rows]
+
+    # ------------------------------------------------------------ answer cache
+    def cache_put(
+        self,
+        prompt: str,
+        *,
+        answer: str,
+        model: str,
+        repo: str = "",
+        citations: list[dict[str, Any]] | None = None,
+        confidence: float = 0.0,
+        max_rows: int = 400,
+    ) -> str:
+        """Store an answer with its embedding, pruning the oldest entries."""
+        now = time.time()
+        entry_id = uuid.uuid4().hex
+        connection = self._connection()
+        with self._lock:
+            connection.execute(
+                "INSERT INTO answer_cache("
+                "id, prompt, repo, model, answer, citations, confidence, embedding, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    entry_id,
+                    prompt.strip(),
+                    repo,
+                    model,
+                    answer,
+                    json.dumps(citations or [], ensure_ascii=False),
+                    float(confidence),
+                    to_bytes(embed(prompt)),
+                    now,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM answer_cache WHERE id IN ("
+                "SELECT id FROM answer_cache ORDER BY created_at DESC LIMIT -1 OFFSET ?)",
+                (max_rows,),
+            )
+            connection.commit()
+        return entry_id
+
+    def cache_lookup(
+        self,
+        prompt: str,
+        *,
+        repo: str = "",
+        threshold: float = 0.92,
+        scan_rows: int = 250,
+    ) -> dict[str, Any] | None:
+        """Best cached answer above ``threshold``; increments its hit counter."""
+        vector = embed(prompt)
+        best: tuple[float, dict[str, Any]] | None = None
+        connection = self._connection()
+        with self._lock:
+            rows = connection.execute(
+                "SELECT * FROM answer_cache WHERE repo=? ORDER BY created_at DESC LIMIT ?",
+                (repo, scan_rows),
+            ).fetchall()
+            for row in rows:
+                try:
+                    cached_vector = from_bytes(row["embedding"])
+                except (TypeError, ValueError):
+                    continue
+                score = cosine(vector, cached_vector)
+                if score < threshold:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, dict(row))
+            if best is None:
+                return None
+            score, entry = best
+            entry["similarity"] = round(score, 4)
+            entry["citations"] = json.loads(entry.get("citations") or "[]")
+            connection.execute(
+                "UPDATE answer_cache SET hits=hits+1, last_hit=? WHERE id=?",
+                (time.time(), entry["id"]),
+            )
+            connection.commit()
+        return entry
+
+    def cache_stats(self) -> dict[str, int]:
+        connection = self._connection()
+        with self._lock:
+            row = connection.execute(
+                "SELECT COUNT(*) AS entries, COALESCE(SUM(hits), 0) AS hits FROM answer_cache"
+            ).fetchone()
+        return {"entries": int(row["entries"]), "hits": int(row["hits"])}
+
+    def cache_clear(self) -> int:
+        connection = self._connection()
+        with self._lock:
+            removed = connection.execute("DELETE FROM answer_cache").rowcount
+            connection.commit()
+        return int(removed or 0)
 
     def memory_count(self) -> int:
         return int(self._connection().execute("SELECT COUNT(*) AS c FROM memories").fetchone()["c"])

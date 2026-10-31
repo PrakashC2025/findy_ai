@@ -1,0 +1,112 @@
+# Run DevMind as an app (PC + phone)
+
+DevMind is one local service with a web interface. The PC does the work - indexing, checks,
+inference - and the phone is a client, so the phone never needs the model or the repository.
+
+```
+┌──────────── PC (the brain) ────────────┐         ┌──────── phone ────────┐
+│ devmind serve                          │  Wi-Fi  │ browser / installed   │
+│  · llama.cpp / Ollama (or demo)        │ <─────> │ PWA at http://PC:8787 │
+│  · SQLite memory + code index          │         │ same UI, small screen │
+│  · sandbox + checks + repair loop      │         │                       │
+└────────────────────────────────────────┘         └───────────────────────┘
+```
+
+## Start on the PC
+
+Three ways, in order of convenience:
+
+1. **Double-click**
+   * Windows: `scripts\devmind.bat`
+   * macOS: `scripts/devmind.command`
+   * Linux: `scripts/devmind.sh`
+
+   Each script finds the repo's `.venv` (or your `python3`), starts the server and opens the browser.
+2. **One command**
+   ```bash
+   devmind serve --open
+   ```
+3. **From a fresh clone**
+   ```bash
+   make install
+   devmind serve --open
+   ```
+
+The app opens at <http://127.0.0.1:8787>. It binds loopback only by default, so nothing on the network
+can reach it.
+
+## Start on the phone
+
+On the PC, expose it to your local network (a token is generated automatically):
+
+```bash
+devmind serve --host 0.0.0.0 --port 8787
+```
+
+The terminal prints two URLs:
+
+```
+DevMind 0.4.0 on http://127.0.0.1:8787
+Open: http://127.0.0.1:8787/?token=6Qk...
+Phone (same Wi-Fi): http://192.168.1.24:8787/?token=6Qk...
+```
+
+Open the phone URL once. The token is stored in the browser and set as an HTTP-only cookie, so you
+do not need to keep it in the address bar. If you open the bare URL instead, the app asks for the
+token once and remembers it. Use **Install** (or *Add to Home Screen*) to get a
+standalone app; the manifest and service worker are included.
+
+To reach the PC from anywhere, use a private tunnel instead of exposing a port:
+
+```bash
+tailscale serve 8787          # or: tailscale funnel 8787 (public, still token-protected)
+```
+
+Then open `http://<pc-name>:8787/?token=…` from the phone. No port forwarding, no cloud account.
+
+> **Token warning:** plain HTTP on a shared Wi-Fi can be observed. Use the token, prefer your own
+> network, and use Tailscale/WireGuard when you are away from home. DevMind refuses to bind a
+> non-loopback address without a token.
+
+## What the web app does
+
+| Tab | Actions |
+|---|---|
+| **Ask** | Streamed answer with difficulty, model, language packs, `file:line` citations, confidence and timings. Hard questions are sampled and upgraded; a near-identical question is answered from the local semantic cache. |
+| **Analyze** | Indexed file list + file preview; **Run checks** executes the project's own tests/lint under CPU/memory/time limits and shows the security scan. |
+| **Fix** | Describe a problem → the model proposes a unified diff, which is applied to a *copy*, security-scanned and checked. "Propose and apply" writes it only when verified, then re-runs the checks on your tree. |
+
+**Open folder** indexes a directory on the machine running the server: type an absolute path, or pass
+`--allow /path/to/projects` to widen what the server may open. Paths outside the allowed roots are
+refused with `403`.
+
+## HTTP API
+
+All endpoints except `/`, `/static/*` and `/healthz` require the token (`X-DevMind-Token` header,
+`?token=` parameter, or the cookie set by it).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/status` | version, backend, hardware, counts, sandbox protections, allowed roots |
+| GET | `/api/repos` | indexed projects |
+| POST | `/api/index` | `{"path": "...", "repo": "..."}` → index a folder |
+| GET | `/api/files?repo=` | indexed paths |
+| GET | `/api/file?repo=&path=` | file text (traversal-guarded, 200 KB cap) |
+| POST | `/api/ask` | server-sent events: `meta`, `token`, `replace`, `done`, `error` |
+| GET | `/api/checks?repo=&run=` | detected commands, check results, security findings |
+| POST | `/api/fix` | `{"problem","repo","rounds","apply"}` → verified patch |
+| POST | `/api/cache/clear` | drop cached answers |
+
+The SSE stream is what makes the UI feel fast: the first `token` events arrive while the model is
+still writing, and a later `replace` event upgrades the answer if the pipeline finds a better one.
+
+## Honest limits
+
+* **The phone cannot open arbitrary folders by itself.** Browsers do not give a page full filesystem
+  access; the PC indexes and the phone reads. On iOS, Safari offers no folder picker at all.
+* **The web app needs the PC** (or another machine running `devmind serve`). The service-worker cache
+  keeps the shell and static files available offline, but answers need the server. On-device WebLLM in
+  the browser is still step 8.
+* **`0.0.0.0` is plain HTTP.** The token protects the API, not the wire. Use a tunnel for anything
+  beyond your own network.
+* **No accounts, no sync, no telemetry.** The server keeps everything in `$DEVMIND_HOME`.
