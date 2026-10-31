@@ -1,5 +1,6 @@
 #!/bin/bash
-# Double-click this file on macOS to open the DevMind web app.
-cd "$(dirname "$0")/.." || exit 1
-if [ -x ".venv/bin/python" ]; then PY=".venv/bin/python"; else PY="$(command -v python3)"; fi
-exec "$PY" -m devmind serve --open --port 8787
+# Double-click this on macOS: it hands over to the shared launcher, which creates
+# .venv, installs DevMind once and starts the web app. If macOS refuses to run the
+# file, right-click > Open, or run:
+#   chmod +x scripts/devmind.command scripts/devmind.sh
+exec bash "$(dirname "$0")/devmind.sh"

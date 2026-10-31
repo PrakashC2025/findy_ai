@@ -115,8 +115,10 @@ devmind serve --open                  # laptop: http://127.0.0.1:8787
 devmind serve --host 0.0.0.0          # phone on the same Wi-Fi; prints a token URL
 ```
 
-Or double-click `scripts/devmind.command` (macOS), `scripts/devmind.bat` (Windows) or
-`scripts/devmind.sh` (Linux) — each starts the server and opens the browser.
+Or double-click **`START-DEVMIND.bat`** (Windows) or **`START-DEVMIND.command`** (macOS) at the top of
+the folder — Linux users run `bash scripts/devmind.sh`. The first run creates `.venv`, installs the
+dependencies, starts the server and opens the browser; the window must stay open. If nothing happens,
+[docs/web.md](docs/web.md#if-double-click-does-nothing) lists the cause and the fix for each symptom.
 
 The same UI works on both: streamed answers with citations and confidence, a project bar that
 indexes any folder on the PC or clones a git URL into `~/.devmind/repos`, **Analyze** (files, checks, security scan) and **Fix** (propose a diff,

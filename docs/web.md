@@ -17,11 +17,13 @@ inference - and the phone is a client, so the phone never needs the model or the
 Three ways, in order of convenience:
 
 1. **Double-click**
-   * Windows: `scripts\devmind.bat`
-   * macOS: `scripts/devmind.command`
-   * Linux: `scripts/devmind.sh`
+   * Windows: `START-DEVMIND.bat` (at the top of the folder)
+   * macOS: `START-DEVMIND.command`
+   * Linux / WSL: `bash scripts/devmind.sh`
 
-   Each script finds the repo's `.venv` (or your `python3`), starts the server and opens the browser.
+   The first double-click creates `.venv`, installs the dependencies (needs internet once), picks a
+   free port if 8787 is busy, starts the server and opens the browser. *Leave the black window open* —
+   it is the server; closing it stops DevMind.
 2. **One command**
    ```bash
    devmind serve --open
@@ -34,6 +36,42 @@ Three ways, in order of convenience:
 
 The app opens at <http://127.0.0.1:8787>. It binds loopback only by default, so nothing on the network
 can reach it.
+
+### If double-click does nothing
+
+The launcher is built to keep its window open and say what went wrong. Check these in order:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Window flashes and closes | No Python 3.11+, or the folder came out of a `.zip` it is still inside | Install Python (tick **Add python.exe to PATH** on Windows), and **extract** the zip before running |
+| macOS: "cannot be opened because it is from an unidentified developer" | Gatekeeper quarantine on a downloaded file | Right-click the file → **Open** → **Open**, or run `xattr -d com.apple.quarantine START-DEVMIND.command` |
+| macOS: "permission denied" | Executable bit lost when downloading | `chmod +x START-DEVMIND.command scripts/devmind.command scripts/devmind.sh` |
+| Linux: "ensurepip is not available" | `python3-venv` missing | `sudo apt install python3-venv` (Fedora: `sudo dnf install python3`) |
+| "Installing DevMind failed" | No internet, or a proxy | Set `HTTPS_PROXY`, or run `.venv/bin/pip install -e .` manually in a terminal |
+| The page opens but answers say "no model" | The app is up; the model server is not | Start llama.cpp / Ollama, or try the UI without a model: `DEVMIND_DEMO=1` (Windows: `set DEVMIND_DEMO=1`) then double-click again |
+
+Full log: `%TEMP%\devmind-launch.log` on Windows, `$TMPDIR/devmind-launch.log` on macOS and Linux.
+
+To see exactly which Python and command the launcher would use, without starting anything:
+
+```bash
+# macOS / Linux
+DEVMIND_LAUNCH_DRY_RUN=1 ./scripts/devmind.sh
+```
+
+```bat
+rem Windows
+set DEVMIND_LAUNCH_DRY_RUN=1
+START-DEVMIND.bat
+```
+
+You can always bypass the launcher:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/python -m devmind serve --open
+```
 
 ## Start on the phone
 
