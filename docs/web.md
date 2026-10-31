@@ -80,6 +80,12 @@ Then open `http://<pc-name>:8787/?token=…` from the phone. No port forwarding,
 `--allow /path/to/projects` to widen what the server may open. Paths outside the allowed roots are
 refused with `403`.
 
+**Clone** takes a git URL (`https://…`, `git@…`, a local path, or GitHub's `owner/name` shorthand),
+clones it with depth 1 into `$DEVMIND_HOME/repos/<name>` and indexes it immediately. Public
+repositories need nothing else. Private repositories need the authenticated CLI once
+(`devmind github login` → `devmind github clone …`), because the web app never asks for your
+passphrase or stores your token in the browser.
+
 ## HTTP API
 
 All endpoints except `/`, `/static/*` and `/healthz` require the token (`X-DevMind-Token` header,
@@ -90,6 +96,7 @@ All endpoints except `/`, `/static/*` and `/healthz` require the token (`X-DevMi
 | GET | `/api/status` | version, backend, hardware, counts, sandbox protections, allowed roots |
 | GET | `/api/repos` | indexed projects |
 | POST | `/api/index` | `{"path": "...", "repo": "..."}` → index a folder |
+| POST | `/api/clone` | `{"url": "...", "name": "..."}` → clone into `$DEVMIND_HOME/repos` and index |
 | GET | `/api/files?repo=` | indexed paths |
 | GET | `/api/file?repo=&path=` | file text (traversal-guarded, 200 KB cap) |
 | POST | `/api/ask` | server-sent events: `meta`, `token`, `replace`, `done`, `error` |

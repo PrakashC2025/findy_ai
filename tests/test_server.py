@@ -183,3 +183,47 @@ def test_cache_clear_endpoint(tmp_path: Path) -> None:
     assert app.state.runtime.store.cache_stats()["entries"] == 1
     removed = _request(app, "POST", "/api/cache/clear").json()["removed"]
     assert removed == 1
+
+
+def _git_source(tmp_path: Path) -> Path:
+    import os
+    import subprocess
+
+    source = tmp_path / "origin"
+    source.mkdir()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=source, check=True, env=env)
+    (source / "app.py").write_text("def hello():\n    return 'hi'\n")
+    (source / "README.md").write_text("# origin\n")
+    subprocess.run(["git", "add", "-A"], cwd=source, check=True, env=env)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=source, check=True, env=env)
+    return source
+
+
+def test_clone_a_git_repository_and_index_it(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    source = _git_source(tmp_path)
+    response = _request(app, "POST", "/api/clone", json={"url": str(source), "name": "origin"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["repo"] == "origin"
+    assert payload["indexed"] >= 1
+    assert Path(payload["root"]).is_dir()
+    files = _request(app, "GET", "/api/files?repo=origin").json()
+    assert "app.py" in files
+
+
+def test_clone_is_idempotent(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    source = _git_source(tmp_path)
+    _request(app, "POST", "/api/clone", json={"url": str(source)})
+    again = _request(app, "POST", "/api/clone", json={"url": str(source)}).json()
+    assert again["already"] is True
+    assert again["repo"] == "origin"

@@ -118,8 +118,8 @@ devmind serve --host 0.0.0.0          # phone on the same Wi-Fi; prints a token 
 Or double-click `scripts/devmind.command` (macOS), `scripts/devmind.bat` (Windows) or
 `scripts/devmind.sh` (Linux) — each starts the server and opens the browser.
 
-The same UI works on both: streamed answers with citations and confidence, a project picker that
-indexes any folder on the PC, **Analyze** (files, checks, security scan) and **Fix** (propose a diff,
+The same UI works on both: streamed answers with citations and confidence, a project bar that
+indexes any folder on the PC or clones a git URL into `~/.devmind/repos`, **Analyze** (files, checks, security scan) and **Fix** (propose a diff,
 verify it on a copy, apply only when it passes). On the phone, open the printed URL once and choose
 *Add to Home Screen* — the manifest and service worker are included. See
 [docs/web.md](docs/web.md) for phone setup, tunnels and the HTTP API.

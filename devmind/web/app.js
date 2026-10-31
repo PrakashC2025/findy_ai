@@ -146,6 +146,29 @@
     }
   }
 
+  async function cloneRepo() {
+    const url = $("git-input").value.trim();
+    if (!url) return;
+    const button = $("clone-btn");
+    button.disabled = true;
+    button.textContent = "cloning…";
+    try {
+      const response = await api("/api/clone", { method: "POST", body: JSON.stringify({ url }) });
+      const data = await response.json();
+      $("git-input").value = "";
+      await loadRepos(data.repo);
+      await loadStatus();
+      $("files-hint").textContent = data.already
+        ? `${data.repo} is already cloned at ${data.root}`
+        : data.summary || `${data.repo}: ${data.indexed} files`;
+    } catch (error) {
+      $("files-hint").textContent = String(error.message || error);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Clone";
+    }
+  }
+
   // -------------------------------------------------------------------- ask
   function addMessage(role, meta) {
     const article = document.createElement("article");
@@ -441,6 +464,8 @@
   };
   $("refresh-btn").onclick = async () => { await loadRepos(); await loadStatus(); };
   $("open-btn").onclick = openFolder;
+  $("clone-btn").onclick = cloneRepo;
+  $("git-input").addEventListener("keydown", (event) => { if (event.key === "Enter") cloneRepo(); });
   $("path-input").addEventListener("keydown", (event) => { if (event.key === "Enter") openFolder(); });
   $("files-btn").onclick = listFiles;
   $("checks-btn").onclick = runChecks;

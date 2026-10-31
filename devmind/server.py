@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from .backends import BackendUnavailable, DemoBackend, LlamaCppBackend, get_back
 from .confidence import assess
 from .config import Config
 from .difficulty import classify_difficulty
+from .github import GitHubError, GitWorkspace
 from .hardware import Hardware
 from .indexer import CodeIndexer
 from .languages import project_packs, style_block
@@ -82,6 +84,11 @@ class FixRequest(BaseModel):
 class CheckRequest(BaseModel):
     repo: str
     run: bool = True
+
+
+class CloneRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=500)
+    name: str = ""
 
 
 # -------------------------------------------------------------------- runtime
@@ -333,6 +340,53 @@ def create_app(
             "chunks": report.chunks,
             "symbols": report.symbols,
             "complete": report.complete,
+            "summary": report.summary(),
+        }
+
+    @app.post("/api/clone")
+    async def api_clone(request: CloneRequest) -> dict[str, Any]:
+        """Clone a repository into $DEVMIND_HOME/repos and index it.
+
+        Public repositories work with the URL alone. Private ones need the
+        authenticated CLI (`devmind github login` + `devmind github clone`)
+        because the web app never holds your passphrase.
+        """
+        url = request.url.strip()
+        raw_name = request.name.strip() or url.rstrip("/").split("/")[-1]
+        safe = re.sub(r"[^A-Za-z0-9._-]", "-", raw_name.removesuffix(".git"))[:80] or "repo"
+        dest = runtime.config.home / "repos" / safe
+        if dest.exists() and any(dest.iterdir()):
+            return {
+                "already": True,
+                "repo": safe,
+                "root": str(dest),
+                "detail": "already cloned; open this folder to index it",
+            }
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target = await asyncio.to_thread(GitWorkspace(dest.parent).clone, url, dest, depth=1)
+        except GitHubError as exc:
+            message = str(exc)
+            if "Authentication" in message or "could not read" in message.lower():
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "clone failed (private repository?). Run `devmind github login` and "
+                        f"`devmind github clone {url} --dest {dest}` in a terminal, then open "
+                        "the folder here."
+                    ),
+                ) from exc
+            raise HTTPException(status_code=502, detail=f"clone failed: {message[-300:]}") from exc
+        report = await asyncio.to_thread(
+            CodeIndexer(runtime.store, runtime.config.index).index, target, repo=safe
+        )
+        return {
+            "already": False,
+            "repo": report.repo,
+            "root": str(target),
+            "indexed": report.indexed,
+            "chunks": report.chunks,
+            "symbols": report.symbols,
             "summary": report.summary(),
         }
 
