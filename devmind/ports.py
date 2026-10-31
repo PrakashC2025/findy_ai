@@ -20,6 +20,17 @@ OPENAI = "openai-compatible"
 WEB = "other web app"
 CLOSED = "closed"
 
+# Friendly names for the `Server` header, so "Apache" becomes actionable.
+SERVER_NOTES = {
+    "apache": "Apache web server (often XAMPP/WAMP) - leave it alone",
+    "nginx": "nginx web server - leave it alone",
+    "microsoft-iis": "Microsoft IIS - leave it alone",
+    "uvicorn": "a Python/uvicorn app - probably DevMind itself",
+    "simplehttp": "Python's http.server, not a model",
+    "gunicorn": "a Python web app, not a model",
+    "werkzeug": "a Flask app, not a model",
+}
+
 # Ports worth checking when nothing is configured correctly. 8080 is llama.cpp's
 # usual port, 11434 is Ollama, 1234 is LM Studio.
 DEFAULT_PORTS = (*range(8080, 8091), 11434, 1234)
@@ -38,6 +49,15 @@ class PortReport:
     @property
     def usable(self) -> bool:
         return self.kind in {LLAMA, OPENAI}
+
+
+def server_note(server: str) -> str:
+    """A short human explanation for a ``Server`` header."""
+    value = (server or "").lower()
+    for needle, note in SERVER_NOTES.items():
+        if needle in value:
+            return note
+    return ""
 
 
 def _model_ids(payload: object) -> list[str]:
@@ -93,6 +113,9 @@ def probe_port(port: int, *, transport: httpx.BaseTransport | None = None) -> Po
         bits = [f"HTTP {root.status_code} on /"]
         if root.headers.get("server"):
             bits.append(f"Server: {root.headers['server']}")
+            note = server_note(root.headers["server"])
+            if note:
+                bits.append(note)
         if looks_like_html(root.text) and page_title(root.text):
             bits.append(f"title {page_title(root.text)!r}")
         return PortReport(port, WEB, " · ".join(bits))

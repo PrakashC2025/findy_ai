@@ -143,7 +143,9 @@
         }
         lines.push(
           "No GGUF yet? Ollama is the shortest path:",
-          "  ollama pull qwen2.5-coder:7b   then   [backend] kind = \"ollama\""
+          "  ollama pull qwen2.5-coder:7b   then   devmind setup --kind ollama --write",
+          "",
+          "Or let DevMind choose a port and write the config:  devmind setup --write"
         );
       }
       out.textContent = lines.join("\n");

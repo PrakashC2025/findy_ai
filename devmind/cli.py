@@ -1037,6 +1037,61 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Point DevMind at a real model: scan the ports, pick one, offer to write it."""
+    from .setup import SetupError, apply_plan, build_plan, find_gguf
+
+    ctx = Context(args)
+    try:
+        gguf = args.gguf or find_gguf()
+        plan = build_plan(ctx.config, kind=args.kind, port=args.port, gguf=gguf)
+    except SetupError as exc:
+        fail(str(exc))
+        asyncio.run(ctx.aclose())
+        return 1
+
+    changed = plan.kind != ctx.config.backend.kind or (
+        plan.kind == "llamacpp" and ctx.config.llamacpp.base_url.rstrip("/") != plan.base_url
+    )
+    if args.json:
+        payload = plan.to_dict()
+        payload["changed"] = changed
+        payload["written"] = bool(args.write and changed)
+        print(json.dumps(payload, indent=2))
+        asyncio.run(ctx.aclose())
+        return 0
+
+    print(paint("DevMind setup", _BOLD))
+    print(f"  backend now   {ctx.config.backend.kind} at {ctx.config.llamacpp.base_url}")
+    print(f"  use           {plan.kind} at {plan.base_url}")
+    for note in plan.notes:
+        print(f"  - {note}")
+    if plan.kind == "llamacpp":
+        print()
+        print(paint("Start the model (keep this window open):", _BOLD))
+        print(f"  {plan.start_command}")
+        if str(plan.start_command).startswith("llama-server") and not gguf:
+            print("  replace <your-model.gguf> with the file you downloaded")
+    print()
+
+    if args.write and changed:
+        apply_plan(ctx.config, plan)
+        ok(f"wrote {ctx.config.config_path}")
+        print("  restart DevMind (close the black window and start it again)")
+    elif changed:
+        print(
+            paint(
+                "nothing written yet - run `devmind setup --write` to save this, "
+                "or `--json` to read it",
+                _DIM,
+            )
+        )
+    else:
+        ok("already configured; nothing to change")
+    asyncio.run(ctx.aclose())
+    return 0
+
+
 def cmd_ports(args: argparse.Namespace) -> int:
     """Answer the question behind most 404s: what is on these ports?"""
     from .ports import LLAMA, OPENAI, scan
@@ -1870,6 +1925,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve_parser.add_argument("--open", action="store_true", help="open the browser")
     serve_parser.set_defaults(func=cmd_serve)
+
+    setup = sub.add_parser(
+        "setup",
+        help="pick a working model port and (optionally) write the config",
+        parents=[common],
+    )
+    setup.add_argument("--kind", choices=["llamacpp", "ollama"], help="force a backend kind")
+    setup.add_argument("--port", type=int, help="use this port instead of scanning")
+    setup.add_argument("--gguf", help="path to a .gguf to put in the printed command")
+    setup.add_argument("--write", action="store_true", help="save the plan to config.toml")
+    setup.add_argument("--json", action="store_true")
+    setup.set_defaults(func=cmd_setup)
 
     ports = sub.add_parser(
         "ports", help="show what is listening on 8080-8090 (or any range)", parents=[common]

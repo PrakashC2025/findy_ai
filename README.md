@@ -10,7 +10,7 @@ No telemetry.
 
 ```
 $ devmind serve --open           # or double-click scripts/devmind.command / .bat
-DevMind 0.6.0 on http://127.0.0.1:8787
+DevMind 0.6.1 on http://127.0.0.1:8787
 
 $ devmind index .
 ✓ shop: 214 indexed, 0 unchanged, 0 removed, 3120 chunks, 2680 symbols in 8.3s - complete
@@ -135,6 +135,7 @@ verify it on a copy, apply only when it passes). On the phone, open the printed 
 |---|---|
 | `devmind doctor` | Hardware, backend health, registry, index, memory and privacy checks |
 | `devmind ports [--from 8080] [--to 8090]` | Show what is listening: llama.cpp, another OpenAI server, another app, or free |
+| `devmind setup [--kind ollama] [--port N] [--write]` | Pick a port with a real model and optionally save it to `config.toml` |
 | `devmind models` | Registry + what fits this machine, with download hints |
 | `devmind ask "…" [--repo PATH] [-m MODEL] [--json] [--show-prompt]` | Streamed, cited answer; `--show-prompt` prints the exact messages sent |
 | `devmind chat` | Interactive session (`/route`, `/memory`, `/teach`, `/exit`) |

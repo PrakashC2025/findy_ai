@@ -82,7 +82,12 @@ class LlamaCppBackend:
             response = await self._http.client.get("/v1/models")
             if response.status_code >= 400:
                 raise BackendUnavailable(
-                    self.http_problem(response.status_code, response.text, what="GET /v1/models")
+                    self.http_problem(
+                        response.status_code,
+                        response.text,
+                        what="GET /v1/models",
+                        server=response.headers.get("server", ""),
+                    )
                 )
             try:
                 payload = response.json()
@@ -146,17 +151,8 @@ class LlamaCppBackend:
         try:
             models = await self.list_models()
         except BackendUnavailable as exc:
-            first = (
-                self.http_problem(
-                    response.status_code,
-                    response.text,
-                    what="GET /health",
-                    server=response.headers.get("server", ""),
-                )
-                if response.status_code >= 400
-                else "the health endpoint returned something that is not llama.cpp JSON"
-            )
-            return Health(False, f"{first}\nGET /v1/models also failed: {exc}")
+            # One message, not two: /v1/models is the check that matters for chat.
+            return Health(False, str(exc))
         return Health(
             True,
             f"OpenAI-compatible server at {self._http.base_url} (no /health endpoint)",
@@ -240,7 +236,13 @@ class LlamaCppBackend:
             if title:
                 clues.append(f"page title: {title!r}")
             if server:
-                clues.append(f"Server header: {server}")
+                from ..ports import server_note
+
+                clue = f"Server header: {server}"
+                note = server_note(server)
+                if note:
+                    clue += f" - {note}"
+                clues.append(clue)
             clue_text = f" ({'; '.join(clues)})" if clues else ""
             proxy_hint = ""
             if self.local:
